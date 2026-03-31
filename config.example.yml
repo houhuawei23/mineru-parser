@@ -1,0 +1,17 @@
+# 用户配置示例（可复制为 config.yml）
+# cp config.example.yml config.yml
+
+api:
+  # 建议改为通过环境变量 MINERU_TOKEN 注入
+  token: ""
+  model_version: "vlm" # 可选: vlm / pipeline
+
+markdown:
+  include_header: false
+  include_footer: false
+  include_page_number: false
+  include_footnote: true
+
+split:
+  page_limit: 100
+

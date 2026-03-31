@@ -1,0 +1,100 @@
+# MinerU PDF 解析器 - 默认配置文件
+# 项目启动时优先加载此文件。缺失或解析失败将报错并指导用户配置。
+# 可通过 -c/--config 指定用户配置文件覆盖部分项。
+# 注意：token 可通过环境变量 MINERU_TOKEN 设置，优先级高于此处。
+
+# ==================== API 相关 ====================
+api:
+  # MinerU API 基础地址（必填）
+  base_url: "https://mineru.net/api/v4"
+  # 模型版本：vlm（可能切分大图）或 pipeline（不切分大图）
+  model_version: "vlm"
+  # API Token，空时从环境变量 MINERU_TOKEN 读取
+  token: ""
+  # 申请上传链接超时（秒）
+  request_timeout_apply: 60
+  # 上传文件超时（秒）
+  request_timeout_upload: 600
+  # 轮询结果超时（秒）
+  request_timeout_poll: 60
+  # 下载 zip 超时（秒）
+  request_timeout_download: 300
+  # 轮询间隔（秒）
+  poll_interval: 10
+  # 最大等待解析完成时间（秒）
+  max_wait: 1200
+
+# ==================== 下载重试 ====================
+download:
+  # 最大重试次数
+  max_retries: 5
+  # 重试等待基数（秒），实际等待 min(30, 2^attempt)
+  retry_wait_cap: 30
+
+# ==================== 分片与并发 ====================
+split:
+  # 文件大小限制（MB），超限时自动切分
+  file_size_limit_mb: 200.0
+  # 每片最大页数
+  page_limit: 100
+  # 最大并发批次数
+  max_workers: 20
+  # 临时目录前缀（用于切分时的 temp dir）
+  temp_dir_prefix: "mineru_split_"
+  # 片段中间输出 md 文件名（合并前各片段的 md）
+  part_md_name: "full.md"
+
+# ==================== 缓存 ====================
+cache:
+  enabled: true
+  # 缓存目录，支持 ~ 展开
+  dir: "~/.cache/mineru_parser"
+  # 计算 PDF 哈希时的读块大小（字节）
+  hash_chunk_size: 8192
+  # 缓存键子目录前缀长度（用于分片存储）
+  key_prefix_len: 2
+
+# ==================== Markdown 输出选项 ====================
+markdown:
+  include_header: false
+  include_footer: false
+  include_page_number: false
+  include_footnote: true
+  merge_paragraphs: true
+  inline_footnotes: true
+
+# ==================== 输出与路径 ====================
+output:
+  # 解析输出目录后缀，输入 xx.pdf 时输出目录为 xx_parsed
+  parsed_suffix: "_parsed"
+  # zip 缓存文件名后缀
+  zip_suffix: "_parsed.zip"
+  # from-json 默认输出 md 文件名（当用户未指定 -o 时）
+  default_md_name: "full.md"
+  # 图片子目录名
+  images_dir: "images"
+  # 图片文件名模式，{idx} 为序号
+  image_filename_pattern: "image_{idx:02d}.png"
+
+# ==================== 批量处理 ====================
+batch:
+  # 包含的文件模式
+  include_pattern: "*.pdf"
+  # 排除的文件模式（正则）
+  exclude_pattern: ""
+
+# ==================== PDF 下载（URL/arXiv） ====================
+pdf_download:
+  # 下载超时（秒）
+  timeout: 120
+  # 最小有效内容长度（字节），低于此值视为无效
+  min_content_size: 100
+  # URL 来源的 output stem 最大长度
+  url_stem_max_len: 80
+
+# ==================== 配置加载 ====================
+config:
+  # 默认配置文件名（项目必须包含此文件）
+  default_filename: "default_config.yml"
+  # Token 环境变量名
+  env_token_var: "MINERU_TOKEN"
