@@ -3,7 +3,9 @@
 import json
 import re
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 
@@ -12,6 +14,31 @@ FOOTNOTE_REFS = "①②③④⑤⑥⑦⑧⑨⑩"
 FOOTNOTE_REF_PATTERN = re.compile(f"[{FOOTNOTE_REFS}]")
 # 句末标点：用于判断段落是否可在跨页时合并
 SENTENCE_END_CHARS = "。！？；：」\""
+
+
+@dataclass
+class PageMeta:
+    """页面元信息。"""
+    headers: list[str] = field(default_factory=list)
+    footers: list[str] = field(default_factory=list)
+    page_num: str | None = None
+
+
+@dataclass
+class ContentBlock:
+    """统一的内容块表示。"""
+    page_idx: int
+    markdown: str
+    is_plain_paragraph: bool
+    footnote_pairs: list[tuple[int, int]] = field(default_factory=list)
+
+
+@dataclass
+class ParsedPage:
+    """解析后的页面数据。"""
+    content_blocks: list[ContentBlock] = field(default_factory=list)
+    footnotes: list[str] = field(default_factory=list)
+    meta: PageMeta = field(default_factory=PageMeta)
 
 
 def find_content_list_json(extract_dir: Path) -> Path | None:
@@ -114,6 +141,128 @@ def _format_footnote(text: str) -> str:
     return f"- {m.group(2)}" if m else f"- {text}"
 
 
+def _merge_paragraphs(
+    flat_blocks: list[ContentBlock],
+    merge_paragraphs: bool = True,
+) -> list[ContentBlock]:
+    """
+    合并跨页的普通段落。
+
+    当上一段未以句末标点结尾时，尝试与后续段落合并（同页或跨一页）。
+    """
+    if not merge_paragraphs or not flat_blocks:
+        return flat_blocks
+
+    merged: list[ContentBlock] = []
+    i = 0
+    while i < len(flat_blocks):
+        current = flat_blocks[i]
+
+        if not current.is_plain_paragraph:
+            merged.append(current)
+            i += 1
+            continue
+
+        # 开始合并
+        merged_md = current.markdown
+        merged_fn_pairs = list(current.footnote_pairs)
+        merged_page = current.page_idx
+        j = i + 1
+
+        while j < len(flat_blocks):
+            next_block = flat_blocks[j]
+            if next_block.page_idx > merged_page + 1:
+                break
+            if not next_block.is_plain_paragraph:
+                break
+            if _ends_with_sentence_end(merged_md):
+                break
+
+            merged_md = merged_md + next_block.markdown
+            merged_fn_pairs.extend(next_block.footnote_pairs)
+            merged_page = next_block.page_idx
+            j += 1
+
+        merged.append(ContentBlock(
+            page_idx=current.page_idx,
+            markdown=merged_md,
+            is_plain_paragraph=True,
+            footnote_pairs=merged_fn_pairs,
+        ))
+        i = j
+
+    return merged
+
+
+def _generate_markdown_output(
+    merged_blocks: list[ContentBlock],
+    pages_meta: dict[int, PageMeta],
+    pages_footnotes: dict[int, list[str]],
+    include_header: bool = False,
+    include_footer: bool = False,
+    include_page_number: bool = False,
+    include_footnote: bool = True,
+    inline_footnotes: bool = True,
+) -> str:
+    """从合并后的内容块生成最终 Markdown。"""
+    all_parts: list[str] = []
+    pages_done: set[int] = set()
+
+    for i, block in enumerate(merged_blocks):
+        page_idx = block.page_idx
+
+        # 输出页眉、页码（每页首次出现时）
+        if page_idx not in pages_done:
+            pages_done.add(page_idx)
+            meta = pages_meta.get(page_idx, PageMeta())
+            if include_header and meta.headers:
+                all_parts.append("<!-- 页眉 -->")
+                all_parts.extend(meta.headers)
+            if include_page_number and meta.page_num is not None:
+                all_parts.append(f"<!-- 页码 {meta.page_num} -->")
+
+        all_parts.append(block.markdown)
+
+        # 内联脚注
+        if inline_footnotes and block.footnote_pairs:
+            fn_lines = []
+            for p, idx in block.footnote_pairs:
+                fns = pages_footnotes.get(p, [])
+                if idx < len(fns) and fns[idx]:
+                    fn_lines.append(f"> {fns[idx]}")
+            if fn_lines:
+                all_parts.append("\n".join(fn_lines))
+
+        # 输出页脚：仅对已完成的页输出页脚
+        next_page = merged_blocks[i + 1].page_idx if i + 1 < len(merged_blocks) else page_idx + 1
+        last_completed = min(
+            max(block.page_idx, page_idx),
+            next_page - 1
+        ) if next_page > page_idx else page_idx
+
+        for p in range(page_idx, last_completed + 1):
+            meta = pages_meta.get(p, PageMeta())
+            if include_footer and meta.footers:
+                all_parts.append("<!-- 页脚 -->")
+                all_parts.extend(meta.footers)
+
+    # 兜底输出未内联的脚注
+    if include_footnote:
+        has_inline_refs = any(block.footnote_pairs for block in merged_blocks)
+        if (not inline_footnotes) or (not has_inline_refs):
+            trailing_notes: list[str] = []
+            for p in sorted(pages_footnotes.keys()):
+                notes = [n for n in pages_footnotes[p] if n]
+                if notes:
+                    trailing_notes.append("<!-- 脚注 -->")
+                    trailing_notes.extend(notes)
+            if trailing_notes:
+                all_parts.extend(trailing_notes)
+
+    result = "\n\n".join(p for p in all_parts if p)
+    return result.replace("\n\n\n\n", "\n\n")
+
+
 def content_list_json_to_markdown(
     json_path: Path,
     include_header: bool = False,
@@ -138,34 +287,38 @@ def content_list_json_to_markdown(
     sorted_items = data
 
     # 按页分组：内容块、脚注、元信息
-    pages_content: dict[int, list[dict]] = defaultdict(list)
-    pages_footnotes: dict[int, list[str]] = defaultdict(list)
-    pages_meta: dict[int, dict] = defaultdict(lambda: {"headers": [], "footers": [], "page_num": None})
+    pages_data: dict[int, ParsedPage] = defaultdict(ParsedPage)
 
     for item in sorted_items:
         t = item.get("type", "")
         text = _extract_text_from_content_list_item(item)
         page_idx = item.get("page_idx", 0)
+        page = pages_data[page_idx]
 
         if t == "header" and text:
-            pages_meta[page_idx]["headers"].append(text)
+            page.meta.headers.append(text)
         elif t == "footer" and text:
-            pages_meta[page_idx]["footers"].append(text)
+            page.meta.footers.append(text)
         elif t == "page_number":
-            pages_meta[page_idx]["page_num"] = text.strip() or str(page_idx + 1)
+            page.meta.page_num = text.strip() or str(page_idx + 1)
         elif t == "page_footnote" and text:
-            pages_footnotes[page_idx].append(_format_footnote(text) if include_footnote else "")
+            page.footnotes.append(_format_footnote(text) if include_footnote else "")
         elif t not in ("header", "footer", "page_number", "page_footnote"):
             if text or t in ("image", "table", "code"):
-                pages_content[page_idx].append(item)
+                md = _item_to_content_md(item, text)
+                if md:
+                    is_plain = _is_plain_paragraph(item)
+                    # 延迟计算 footnote_pairs，在构建 flat_blocks 时统一处理
+                    page.content_blocks.append((md, item, is_plain))
 
-    # 构建扁平内容流：(page_idx, item, footnote_pairs)，footnote_pairs 为 (page_idx, fn_idx) 列表
-    flat_blocks: list[tuple[int, dict, list[tuple[int, int]]]] = []
-    for page_idx in sorted(pages_content.keys()):
-        items = pages_content[page_idx]
-        footnotes = pages_footnotes.get(page_idx, [])
+    # 构建扁平内容流
+    flat_blocks: list[ContentBlock] = []
+    for page_idx in sorted(pages_data.keys()):
+        page = pages_data[page_idx]
+        footnotes = page.footnotes
         fn_idx = 0
-        for item in items:
+
+        for md, item, is_plain in page.content_blocks:
             text = _extract_text_from_content_list_item(item)
             refs = _extract_footnote_refs(text)
             pairs = []
@@ -173,88 +326,30 @@ def content_list_json_to_markdown(
                 if fn_idx < len(footnotes):
                     pairs.append((page_idx, fn_idx))
                     fn_idx += 1
-            flat_blocks.append((page_idx, item, pairs))
 
-    # 合并跨页段落并输出
-    all_parts: list[str] = []
-    pages_done: set[int] = set()
-    i = 0
-    while i < len(flat_blocks):
-        page_idx, item, fn_indices = flat_blocks[i]
-        text = _extract_text_from_content_list_item(item)
-        md = _item_to_content_md(item, text)
-        if not md:
-            i += 1
-            continue
+            flat_blocks.append(ContentBlock(
+                page_idx=page_idx,
+                markdown=md,
+                is_plain_paragraph=is_plain,
+                footnote_pairs=pairs,
+            ))
 
-        # 输出页眉、页码（每页首次出现时）
-        if page_idx not in pages_done:
-            pages_done.add(page_idx)
-            meta = pages_meta[page_idx]
-            if include_header and meta["headers"]:
-                all_parts.append("<!-- 页眉 -->")
-                all_parts.extend(meta["headers"])
-            if include_page_number and meta["page_num"] is not None:
-                all_parts.append(f"<!-- 页码 {meta['page_num']} -->")
+    # 提取元信息和脚注字典用于输出
+    pages_meta = {p: data.meta for p, data in pages_data.items()}
+    pages_footnotes = {p: data.footnotes for p, data in pages_data.items()}
 
-        merged_md = md
-        merged_fn_pairs = list(fn_indices)
-        merged_page = page_idx
-
-        # 尝试合并后续普通段落（同页或跨页，当上一段未以句末标点结尾时）
-        if merge_paragraphs and _is_plain_paragraph(item):
-            j = i + 1
-            while j < len(flat_blocks):
-                next_page, next_item, next_fn = flat_blocks[j]
-                if next_page > merged_page + 1:
-                    break
-                if not _is_plain_paragraph(next_item):
-                    break
-                if _ends_with_sentence_end(merged_md):
-                    break
-                next_text = _extract_text_from_content_list_item(next_item)
-                next_md = _item_to_content_md(next_item, next_text)
-                merged_md = merged_md + next_md
-                merged_fn_pairs.extend(next_fn)
-                merged_page = next_page
-                j += 1
-            i = j
-        else:
-            i += 1
-
-        all_parts.append(merged_md)
-        if inline_footnotes and merged_fn_pairs:
-            fn_lines = []
-            for p, idx in merged_fn_pairs:
-                fns = pages_footnotes.get(p, [])
-                if idx < len(fns) and fns[idx]:
-                    fn_lines.append(f"> {fns[idx]}")
-            if fn_lines:
-                all_parts.append("\n".join(fn_lines))
-
-        # 输出页脚：仅对已完成的页（下一块来自更高页或已结束）输出页脚
-        next_page = flat_blocks[i][0] if i < len(flat_blocks) else merged_page + 1
-        last_completed = min(merged_page, next_page - 1) if next_page > page_idx else merged_page
-        for p in range(page_idx, last_completed + 1):
-            if include_footer and pages_meta[p]["footers"]:
-                all_parts.append("<!-- 页脚 -->")
-                all_parts.extend(pages_meta[p]["footers"])
-
-    # 兜底输出未内联的脚注（或无正文时仅有脚注）。
-    if include_footnote:
-        has_inline_refs = any(pairs for _, _, pairs in flat_blocks)
-        if (not inline_footnotes) or (not has_inline_refs):
-            trailing_notes: list[str] = []
-            for p in sorted(pages_footnotes.keys()):
-                notes = [n for n in pages_footnotes[p] if n]
-                if notes:
-                    trailing_notes.append("<!-- 脚注 -->")
-                    trailing_notes.extend(notes)
-            if trailing_notes:
-                all_parts.extend(trailing_notes)
-
-    result = "\n\n".join(p for p in all_parts if p)
-    return result.replace("\n\n\n\n", "\n\n")
+    # 合并段落并生成输出
+    merged_blocks = _merge_paragraphs(flat_blocks, merge_paragraphs)
+    return _generate_markdown_output(
+        merged_blocks,
+        pages_meta,
+        pages_footnotes,
+        include_header=include_header,
+        include_footer=include_footer,
+        include_page_number=include_page_number,
+        include_footnote=include_footnote,
+        inline_footnotes=inline_footnotes,
+    )
 
 
 def _get_text_from_content_v2(content: dict) -> str:
@@ -281,6 +376,73 @@ def _is_plain_paragraph_v2(item: dict) -> bool:
     return item.get("type") == "paragraph"
 
 
+def _convert_v2_to_content_blocks(
+    data: list,
+    include_footnote: bool = True,
+) -> tuple[dict[int, list[ContentBlock]], dict[int, PageMeta], dict[int, list[str]]]:
+    """将 content_list_v2 数据转换为统一的内容块格式。"""
+    pages_content: dict[int, list[ContentBlock]] = defaultdict(list)
+    pages_footnotes: dict[int, list[str]] = defaultdict(list)
+    pages_meta: dict[int, PageMeta] = defaultdict(PageMeta)
+
+    for page_idx, page_items in enumerate(data):
+        if not isinstance(page_items, list):
+            continue
+
+        page_blocks: list[tuple[str, dict, bool]] = []  # (md, item, is_plain)
+
+        for item in page_items:
+            t = item.get("type", "")
+            content = item.get("content", {})
+            text = _get_text_from_content_v2(content) if isinstance(content, dict) else ""
+
+            if t == "header" and text:
+                pages_meta[page_idx].headers.append(text)
+            elif t == "footer" and text:
+                pages_meta[page_idx].footers.append(text)
+            elif t == "page_number":
+                pages_meta[page_idx].page_num = text.strip() or str(page_idx + 1)
+            elif t == "page_footnote" and text:
+                pages_footnotes[page_idx].append(_format_footnote(text) if include_footnote else "")
+            elif t == "title":
+                level = content.get("level", 1)
+                md = f"{'#' * min(level, 6)} {text}"
+                page_blocks.append((md, item, False))
+            elif t == "paragraph":
+                page_blocks.append((text, item, True))
+            elif t == "list":
+                for li in content.get("list_items", []):
+                    ic = li.get("item_content", []) if isinstance(li, dict) else []
+                    line = " ".join(
+                        c.get("content", "") if isinstance(c, dict) else "" for c in ic
+                    ).strip()
+                    if line:
+                        page_blocks.append((f"- {line}", item, False))
+            elif t == "table" or text:
+                page_blocks.append((text, item, False))
+
+        # 为该页的所有内容块计算脚注引用
+        footnotes = pages_footnotes[page_idx]
+        fn_idx = 0
+        for md, item, is_plain in page_blocks:
+            text = _get_text_from_content_v2(item.get("content", {}))
+            refs = _extract_footnote_refs(text)
+            pairs = []
+            for _ in refs:
+                if fn_idx < len(footnotes):
+                    pairs.append((page_idx, fn_idx))
+                    fn_idx += 1
+
+            pages_content[page_idx].append(ContentBlock(
+                page_idx=page_idx,
+                markdown=md,
+                is_plain_paragraph=is_plain,
+                footnote_pairs=pairs,
+            ))
+
+    return pages_content, pages_meta, pages_footnotes
+
+
 def content_list_v2_to_markdown(
     json_path: Path,
     include_header: bool = False,
@@ -298,126 +460,25 @@ def content_list_v2_to_markdown(
         logger.warning("content_list_v2 JSON 格式异常：非列表")
         return ""
 
-    # 按页分组：内容块与脚注
-    pages_content: dict[int, list[tuple[str, dict]]] = defaultdict(list)  # (md, item)
-    pages_footnotes: dict[int, list[str]] = defaultdict(list)
-    pages_meta: dict[int, dict] = defaultdict(lambda: {"headers": [], "footers": [], "page_num": None})
+    # 转换为统一格式
+    pages_content, pages_meta, pages_footnotes = _convert_v2_to_content_blocks(
+        data, include_footnote=include_footnote
+    )
 
-    for page_idx, page_items in enumerate(data):
-        if not isinstance(page_items, list):
-            continue
-        for item in page_items:
-            t = item.get("type", "")
-            content = item.get("content", {})
-            text = _get_text_from_content_v2(content) if isinstance(content, dict) else ""
-
-            if t == "header" and text:
-                pages_meta[page_idx]["headers"].append(text)
-            elif t == "footer" and text:
-                pages_meta[page_idx]["footers"].append(text)
-            elif t == "page_number":
-                pages_meta[page_idx]["page_num"] = text.strip() or str(page_idx + 1)
-            elif t == "page_footnote" and text:
-                pages_footnotes[page_idx].append(_format_footnote(text) if include_footnote else "")
-            elif t == "title":
-                level = content.get("level", 1)
-                pages_content[page_idx].append((f"{'#' * min(level, 6)} {text}", item))
-            elif t == "paragraph":
-                pages_content[page_idx].append((text, item))
-            elif t == "list":
-                for li in content.get("list_items", []):
-                    ic = li.get("item_content", []) if isinstance(li, dict) else []
-                    line = " ".join(
-                        c.get("content", "") if isinstance(c, dict) else "" for c in ic
-                    ).strip()
-                    if line:
-                        pages_content[page_idx].append((f"- {line}", item))
-            elif t == "table" or text:
-                pages_content[page_idx].append((text, item))
-
-    # 构建扁平内容流：(page_idx, md, item, footnote_pairs)
-    flat_blocks: list[tuple[int, str, dict, list[tuple[int, int]]]] = []
+    # 构建扁平内容流
+    flat_blocks: list[ContentBlock] = []
     for page_idx in sorted(pages_content.keys()):
-        items = pages_content[page_idx]
-        footnotes = pages_footnotes.get(page_idx, [])
-        fn_idx = 0
-        for md, item in items:
-            text = _get_text_from_content_v2(item.get("content", {}))
-            refs = _extract_footnote_refs(text)
-            pairs = []
-            for _ in refs:
-                if fn_idx < len(footnotes):
-                    pairs.append((page_idx, fn_idx))
-                    fn_idx += 1
-            flat_blocks.append((page_idx, md, item, pairs))
+        flat_blocks.extend(pages_content[page_idx])
 
-    # 合并跨页段落并输出
-    all_parts: list[str] = []
-    pages_done: set[int] = set()
-    i = 0
-    while i < len(flat_blocks):
-        page_idx, md, item, fn_indices = flat_blocks[i]
-        meta = pages_meta[page_idx]
-        footnotes = pages_footnotes.get(page_idx, [])
-
-        if page_idx not in pages_done:
-            pages_done.add(page_idx)
-            if include_header and meta["headers"]:
-                all_parts.append("<!-- 页眉 -->")
-                all_parts.extend(meta["headers"])
-            if include_page_number and meta["page_num"] is not None:
-                all_parts.append(f"<!-- 页码 {meta['page_num']} -->")
-
-        merged_md = md
-        merged_fn_pairs = list(fn_indices)
-        merged_page = page_idx
-
-        if merge_paragraphs and _is_plain_paragraph_v2(item):
-            j = i + 1
-            while j < len(flat_blocks):
-                next_page, next_md, next_item, next_fn = flat_blocks[j]
-                if next_page > merged_page + 1:
-                    break
-                if not _is_plain_paragraph_v2(next_item):
-                    break
-                if _ends_with_sentence_end(merged_md):
-                    break
-                merged_md = merged_md + next_md
-                merged_fn_pairs.extend(next_fn)
-                merged_page = next_page
-                j += 1
-            i = j
-        else:
-            i += 1
-
-        all_parts.append(merged_md)
-        if inline_footnotes and merged_fn_pairs:
-            fn_lines = []
-            for p, idx in merged_fn_pairs:
-                fns = pages_footnotes.get(p, [])
-                if idx < len(fns) and fns[idx]:
-                    fn_lines.append(f"> {fns[idx]}")
-            if fn_lines:
-                all_parts.append("\n".join(fn_lines))
-
-        next_page = flat_blocks[i][0] if i < len(flat_blocks) else merged_page + 1
-        last_completed = min(merged_page, next_page - 1) if next_page > page_idx else merged_page
-        for p in range(page_idx, last_completed + 1):
-            if include_footer and pages_meta[p]["footers"]:
-                all_parts.append("<!-- 页脚 -->")
-                all_parts.extend(pages_meta[p]["footers"])
-
-    if include_footnote:
-        has_inline_refs = any(pairs for _, _, _, pairs in flat_blocks)
-        if (not inline_footnotes) or (not has_inline_refs):
-            trailing_notes: list[str] = []
-            for p in sorted(pages_footnotes.keys()):
-                notes = [n for n in pages_footnotes[p] if n]
-                if notes:
-                    trailing_notes.append("<!-- 脚注 -->")
-                    trailing_notes.extend(notes)
-            if trailing_notes:
-                all_parts.extend(trailing_notes)
-
-    result = "\n\n".join(p for p in all_parts if p)
-    return result.replace("\n\n\n\n", "\n\n")
+    # 合并段落并生成输出
+    merged_blocks = _merge_paragraphs(flat_blocks, merge_paragraphs)
+    return _generate_markdown_output(
+        merged_blocks,
+        pages_meta,
+        pages_footnotes,
+        include_header=include_header,
+        include_footer=include_footer,
+        include_page_number=include_page_number,
+        include_footnote=include_footnote,
+        inline_footnotes=inline_footnotes,
+    )

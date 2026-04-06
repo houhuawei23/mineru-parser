@@ -1,0 +1,64 @@
+# Project specific - Config files (keep example)
+config.yml
+config.json
+!config.example.yml
+
+# Local cache and state
+.cache/
+.mineru_batch_state.db
+
+# Claude/CodeGraph
+.claude/
+.codegraph/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.nox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output files
+*_output.txt
+*_output.md
+*_parsed/
+*.zip
+
+# Academic Extension Cache
+.vscode/academic-cache

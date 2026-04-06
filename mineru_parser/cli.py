@@ -15,7 +15,9 @@ from mineru_parser import __version__
 from mineru_parser.api import parse_pdf_via_api_with_auto_split
 from mineru_parser.config import ConfigError, load_config
 from mineru_parser.markdown import regenerate_markdown_from_json
-from mineru_parser.utils import resolve_input_to_pdf
+from mineru_parser.pdf_splitter import get_pdf_info
+from mineru_parser.state import BatchStateManager, JobStatus, get_state_file
+from mineru_parser.utils import collect_pdf_paths, resolve_input_to_pdf
 
 app = typer.Typer(
     name="mineru-parse",
@@ -77,6 +79,10 @@ def main_callback(
         False, "-d", "--debug",
         help="调试模式，输出详细日志",
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="模拟运行，不实际调用 API，仅显示将要处理的内容",
+    ),
 ) -> None:
     """MinerU PDF 解析器。"""
     setup_logging(quiet=quiet, debug=debug)
@@ -91,7 +97,10 @@ def main_callback(
         "no_cache": no_cache,
         "no_merge_paragraphs": no_merge_paragraphs,
         "no_inline_footnotes": no_inline_footnotes,
+        "dry_run": dry_run,
     }
+    if dry_run:
+        typer.echo("[DRY RUN] 模拟模式 - 不会实际调用 API")
 
 
 def _apply_subcommand_config(ctx: typer.Context, config_path: Path | None) -> None:
@@ -315,10 +324,18 @@ def batch_cmd(
         path_type=Path,
         help="覆盖配置（YAML）；优先级见主命令 --help",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="断点续传模式：跳过已完成的文件，继续处理上次中断的批次",
+    ),
+    reset_failed: bool = typer.Option(
+        False,
+        "--reset-failed",
+        help="重置失败任务状态，重新尝试处理失败的文件",
+    ),
 ) -> None:
     """批量解析 PDF。"""
-    from mineru_parser.utils import collect_pdf_paths
-
     _apply_subcommand_config(ctx, config_path)
     cfg = ctx.obj["config"]
     tok = token or cfg.token
@@ -348,8 +365,92 @@ def batch_cmd(
     md_opts = _get_md_options(ctx)
     model_version = model or cfg.model_version
 
-    failed = 0
-    for pdf_path in tqdm(paths, desc="解析 PDF"):
+    # Dry run mode
+    if ctx.obj.get("dry_run", False):
+        typer.echo(f"\n[DRY RUN] 将要处理的文件 ({len(paths)} 个):")
+        total_pages = 0
+        total_size = 0
+        for pdf_path in paths:
+            try:
+                num_pages, size_bytes = get_pdf_info(pdf_path)
+                total_pages += num_pages
+                total_size += size_bytes
+                size_mb = size_bytes / 1024 / 1024
+                typer.echo(f"  - {pdf_path} ({num_pages} 页, {size_mb:.1f} MB)")
+            except Exception as e:
+                typer.echo(f"  - {pdf_path} (无法获取信息: {e})")
+        typer.echo(f"\n汇总:")
+        typer.echo(f"  文件数: {len(paths)}")
+        typer.echo(f"  总页数: {total_pages}")
+        typer.echo(f"  总大小: {total_size / 1024 / 1024:.1f} MB")
+        typer.echo(f"  模型: {model_version}")
+        typer.echo(f"  输出目录: {out_base}")
+        typer.echo(f"\n[DRY RUN] 未实际调用 API，以上仅为预览")
+        raise typer.Exit(0)
+
+    # Initialize state manager for resume capability
+    state_file = get_state_file(input_path, out_base)
+    with BatchStateManager(state_file) as state:
+        if reset_failed:
+            reset_count = state.reset_failed()
+            logger.info(f"已重置 {reset_count} 个失败任务")
+
+        if resume:
+            summary = state.get_summary()
+            completed = summary.get(JobStatus.COMPLETED.value, 0)
+            failed = summary.get(JobStatus.FAILED.value, 0)
+            if completed > 0 or failed > 0:
+                logger.info(f"断点续传模式: 已完成 {completed} 个, 失败 {failed} 个, 待处理 {summary.get(JobStatus.PENDING.value, 0)} 个")
+
+        # Create/update job records
+        for pdf_path in paths:
+            state.create_job(str(pdf_path))
+
+        # Filter paths based on resume mode
+        if resume:
+            original_count = len(paths)
+            paths = [p for p in paths if state.should_process(str(p), resume=True)]
+            skipped = original_count - len(paths)
+            if skipped > 0:
+                logger.info(f"跳过 {skipped} 个已处理/处理中的文件")
+
+        if not paths:
+            logger.info("没有需要处理的文件")
+            raise typer.Exit(0)
+
+        failed = 0
+        for pdf_path in tqdm(paths, desc="解析 PDF"):
+            pdf_str = str(pdf_path)
+            state.update_job(pdf_str, JobStatus.RUNNING)
+            out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                result = parse_pdf_via_api_with_auto_split(
+                    pdf_path,
+                    tok,
+                    out_dir,
+                    cfg,
+                    base_url=cfg.base_url,
+                    model_version=model_version,
+                    poll_interval=cfg.poll_interval,
+                    max_wait=cfg.max_wait,
+                    cache_enabled=cfg.cache_enabled,
+                    cache_dir=cfg.cache_dir,
+                    use_cache=not ctx.obj["no_cache"],
+                    **md_opts,
+                )
+                if result:
+                    state.update_job(pdf_str, JobStatus.COMPLETED)
+                else:
+                    state.update_job(pdf_str, JobStatus.FAILED, "解析返回空结果")
+                    failed += 1
+            except Exception as e:
+                logger.error(f"处理失败 {pdf_path}: {e}")
+                state.update_job(pdf_str, JobStatus.FAILED, str(e))
+                failed += 1
+
+    if failed:
         out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
         out_dir.mkdir(parents=True, exist_ok=True)
 

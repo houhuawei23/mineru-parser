@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -11,8 +12,13 @@ from typing import TYPE_CHECKING
 
 import requests
 from loguru import logger
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from mineru_parser.cache import get_cached_zip, get_default_cache_dir, save_to_cache
+# 默认 API 并发限制（信号量）
+DEFAULT_API_RATE_LIMIT = 5
+
+from mineru_parser.cache import get_cached_zip, save_to_cache
 from mineru_parser.markdown import build_markdown_from_zip, merge_markdown_parts
 from mineru_parser.pdf_splitter import (
     extract_pages_to_pdf,
@@ -24,6 +30,9 @@ from mineru_parser.pdf_splitter import (
 if TYPE_CHECKING:
     from mineru_parser.config import Config
 
+# Thread-local storage for sessions to ensure thread safety
+_thread_local = threading.local()
+
 
 def get_headers(token: str) -> dict:
     return {
@@ -32,18 +41,67 @@ def get_headers(token: str) -> dict:
     }
 
 
+def get_session(
+    pool_connections: int = 10,
+    pool_maxsize: int = 20,
+    max_retries: int = 3,
+) -> requests.Session:
+    """
+    获取带连接池的 requests.Session。
+
+    使用线程本地存储确保线程安全。每个线程有自己的 session 实例。
+
+    :param pool_connections: 保持的连接数（默认 10）
+    :param pool_maxsize: 连接池最大大小（默认 20）
+    :param max_retries: 重试次数（默认 3）
+    :return: 配置好的 Session 实例
+    """
+    if not hasattr(_thread_local, "session"):
+        session = requests.Session()
+
+        # 配置重试策略
+        retry_strategy = Retry(
+            total=max_retries,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+
+        # 配置连接池
+        adapter = HTTPAdapter(
+            pool_connections=pool_connections,
+            pool_maxsize=pool_maxsize,
+            max_retries=retry_strategy,
+        )
+
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        _thread_local.session = session
+
+    return _thread_local.session
+
+
+def close_session() -> None:
+    """关闭当前线程的 session。"""
+    if hasattr(_thread_local, "session"):
+        _thread_local.session.close()
+        delattr(_thread_local, "session")
+
+
 def apply_upload_urls(
     token: str,
     base_url: str,
     file_name: str,
     model_version: str,
     timeout: int,
+    session: requests.Session | None = None,
 ) -> dict | None:
     """申请文件上传链接。返回 {"batch_id": "...", "file_urls": ["https://..."]} 或 None。"""
     url = f"{base_url}/file-urls/batch"
     data = {"files": [{"name": file_name}], "model_version": model_version}
+    _session = session or get_session()
     try:
-        resp = requests.post(url, headers=get_headers(token), json=data, timeout=timeout)
+        resp = _session.post(url, headers=get_headers(token), json=data, timeout=timeout)
         if resp.status_code != 200:
             logger.error(f"申请上传链接失败: HTTP {resp.status_code}")
             return None
@@ -63,14 +121,20 @@ def apply_upload_urls(
         return None
 
 
-def upload_file_to_url(pdf_path: Path, upload_url: str, timeout: int) -> bool:
+def upload_file_to_url(
+    pdf_path: Path,
+    upload_url: str,
+    timeout: int,
+    session: requests.Session | None = None,
+) -> bool:
     """将本地 PDF 用 PUT 上传到 upload_url。"""
     if not pdf_path.exists():
         logger.error(f"文件不存在: {pdf_path}")
         return False
+    _session = session or get_session()
     try:
         with open(pdf_path, "rb") as f:
-            resp = requests.put(upload_url, data=f, timeout=timeout)
+            resp = _session.put(upload_url, data=f, timeout=timeout)
         if resp.status_code != 200:
             logger.error(f"上传失败: HTTP {resp.status_code}")
             return False
@@ -87,13 +151,15 @@ def poll_batch_result(
     poll_interval: int,
     max_wait: int,
     timeout: int,
+    session: requests.Session | None = None,
 ) -> dict | None:
     """轮询批量任务结果，直到 state=done 或失败或超时。"""
     url = f"{base_url}/extract-results/batch/{batch_id}"
+    _session = session or get_session()
     start = time.time()
     while time.time() - start < max_wait:
         try:
-            resp = requests.get(url, headers=get_headers(token), timeout=timeout)
+            resp = _session.get(url, headers=get_headers(token), timeout=timeout)
             if resp.status_code != 200:
                 time.sleep(poll_interval)
                 continue
@@ -136,8 +202,10 @@ def download_zip(
     timeout: int,
     max_retries: int,
     retry_wait_cap: int,
+    session: requests.Session | None = None,
 ) -> bytes | None:
     """下载 zip 内容，支持重试。"""
+    import random
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -146,17 +214,19 @@ def download_zip(
         {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
     ]
     last_error: Exception | None = None
+    _session = session or get_session()
 
     for attempt in range(max_retries):
         if attempt > 0:
-            wait = min(retry_wait_cap, 2**attempt)
-            logger.info(f"下载重试 {attempt + 1}/{max_retries}，{wait}s 后重试...")
+            # 指数退避 + 随机抖动，避免惊群效应
+            wait = min(retry_wait_cap, 2**attempt) + random.uniform(0, 1)
+            logger.info(f"下载重试 {attempt + 1}/{max_retries}，{wait:.1f}s 后重试...")
             time.sleep(wait)
 
         for verify_ssl in (True, False):
             for headers in header_variants:
                 try:
-                    resp = requests.get(
+                    resp = _session.get(
                         zip_url, headers=headers, timeout=timeout, verify=verify_ssl
                     )
                     if resp.status_code == 200:
@@ -189,6 +259,7 @@ def parse_pdf_via_api(
     use_cache: bool = True,
     save_zip_to_output: bool = False,
     output_md_name: str | None = None,
+    session: requests.Session | None = None,
 ) -> str | None:
     """
     上传 PDF 到 MinerU API 解析，下载 zip，解压并生成 Markdown。
@@ -197,8 +268,10 @@ def parse_pdf_via_api(
     :param use_cache: 本次调用是否使用缓存（False 时强制重新解析）
     :param save_zip_to_output: 是否将 zip 保存到输出目录旁（默认否，仅缓存）
     :param output_md_name: 输出 md 文件名，默认 {pdf_stem}.md
+    :param session: 可选的 requests Session，用于连接复用
     :return: markdown 字符串，失败返回 None
     """
+    _session = session or get_session()
     base_url = base_url or config.base_url
     model_version = model_version or config.model_version
     poll_interval = poll_interval or config.poll_interval
@@ -213,7 +286,7 @@ def parse_pdf_via_api(
 
     # 尝试从缓存获取
     if cache_enabled and use_cache:
-        zip_content = get_cached_zip(pdf_path, _cache_dir, model_version)
+        zip_content = get_cached_zip(pdf_path, _cache_dir, config, model_version)
         if zip_content is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
             if save_zip_to_output:
@@ -238,7 +311,7 @@ def parse_pdf_via_api(
 
     logger.info("正在申请上传链接...")
     apply_result = apply_upload_urls(
-        token, base_url, pdf_path.name, model_version, config.request_timeout_apply
+        token, base_url, pdf_path.name, model_version, config.request_timeout_apply, session=_session
     )
     if not apply_result:
         return None
@@ -247,7 +320,7 @@ def parse_pdf_via_api(
     logger.info(f"batch_id: {batch_id}")
 
     logger.info("正在上传文件...")
-    if not upload_file_to_url(pdf_path, file_urls[0], config.request_timeout_upload):
+    if not upload_file_to_url(pdf_path, file_urls[0], config.request_timeout_upload, session=_session):
         return None
     logger.info("上传成功，等待解析...")
 
@@ -258,6 +331,7 @@ def parse_pdf_via_api(
         poll_interval,
         max_wait,
         config.request_timeout_poll,
+        session=_session,
     )
     if not result:
         return None
@@ -272,6 +346,7 @@ def parse_pdf_via_api(
         config.request_timeout_download,
         config.download_max_retries,
         config.download_retry_wait_cap,
+        session=_session,
     )
     if not zip_content:
         return None
@@ -284,7 +359,7 @@ def parse_pdf_via_api(
 
     # 写入缓存
     if cache_enabled and use_cache:
-        save_to_cache(pdf_path, zip_content, _cache_dir, model_version)
+        save_to_cache(pdf_path, zip_content, _cache_dir, config, model_version)
 
     markdown = build_markdown_from_zip(
         zip_content,
@@ -309,6 +384,7 @@ def parse_pdf_via_api_with_auto_split(
     file_size_limit_mb: float = 0,
     page_limit: int = 0,
     max_workers: int = 0,
+    api_rate_limit: int = DEFAULT_API_RATE_LIMIT,
     base_url: str = "",
     model_version: str = "",
     poll_interval: int = 0,
@@ -329,7 +405,8 @@ def parse_pdf_via_api_with_auto_split(
 
     :param file_size_limit_mb: 文件大小限制（MB），默认 200
     :param page_limit: 每片页数，默认 100
-    :param max_workers: 最大并发批次数，默认 20
+    :param max_workers: 最大并发线程数，默认 20
+    :param api_rate_limit: API 并发限制（信号量），默认 5
     :param pages_spec: 可选，仅解析指定页，格式如 ``10-20,30-40``（1-based，与 CLI --pages 一致）
     :return: markdown 字符串，失败返回 None
     """
@@ -404,6 +481,7 @@ def parse_pdf_via_api_with_auto_split(
             cache_enabled=cache_enabled,
             cache_dir=cache_dir,
             use_cache=use_cache,
+            api_rate_limit=api_rate_limit,
         )
     finally:
         if temp_extracted is not None:
@@ -434,6 +512,7 @@ def _parse_pdf_via_api_with_auto_split_body(
     cache_enabled: bool,
     cache_dir: Path | None,
     use_cache: bool,
+    api_rate_limit: int = DEFAULT_API_RATE_LIMIT,
 ) -> str | None:
     if num_pages <= page_limit and size_bytes <= size_limit_bytes:
         return parse_pdf_via_api(
@@ -491,23 +570,27 @@ def _parse_pdf_via_api_with_auto_split_body(
 
         part_results: dict[int, Path] = {}
 
+        # 使用信号量限制并发 API 调用数
+        api_semaphore = threading.Semaphore(api_rate_limit)
+
         def parse_one(idx: int, part_path: Path) -> tuple[int, Path | None]:
-            part_out = temp_dir / f"_part{idx}"
-            part_out.mkdir(parents=True, exist_ok=True)
-            ok = parse_pdf_via_api(
-                part_path,
-                token,
-                part_out,
-                config,
-                output_md_name=config.part_md_name,
-                **{
-                    k: v
-                    for k, v in api_opts.items()
-                    if k not in ("config", "token")
-                },
-                **md_opts,
-            )
-            return (idx, part_out if ok else None)
+            with api_semaphore:
+                part_out = temp_dir / f"_part{idx}"
+                part_out.mkdir(parents=True, exist_ok=True)
+                ok = parse_pdf_via_api(
+                    part_path,
+                    token,
+                    part_out,
+                    config,
+                    output_md_name=config.part_md_name,
+                    **{
+                        k: v
+                        for k, v in api_opts.items()
+                        if k not in ("config", "token")
+                    },
+                    **md_opts,
+                )
+                return (idx, part_out if ok else None)
 
         failed = 0
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
