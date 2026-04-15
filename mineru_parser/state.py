@@ -52,13 +52,16 @@ class BatchStateManager:
         """
         self.state_file = state_file
         self._local = threading.local()
+        self._transition_lock = threading.Lock()
         self._ensure_db()
 
     def _get_connection(self) -> sqlite3.Connection:
         """获取线程本地的数据库连接。"""
         if not hasattr(self._local, "connection"):
-            self._local.connection = sqlite3.connect(self.state_file)
+            self._local.connection = sqlite3.connect(str(self.state_file))
             self._local.connection.row_factory = sqlite3.Row
+            # 启用 WAL 模式以提升并发写入性能
+            self._local.connection.execute("PRAGMA journal_mode=WAL")
         return self._local.connection
 
     def _ensure_db(self) -> None:
@@ -181,6 +184,44 @@ class BatchStateManager:
             return False
 
         return True
+
+    def try_start_job(self, file_path: str, resume: bool = True) -> bool:
+        """
+        原子化地检查任务是否应被处理并将其标记为 RUNNING。
+
+        在并发批处理中防止两个线程同时看到 PENDING 并都尝试启动。
+        使用 ``_transition_lock`` 保证检查与状态更新的原子性。
+
+        :param file_path: 文件路径
+        :param resume: 是否启用断点续传模式
+        :return: 是否成功认领该任务
+        """
+        with self._transition_lock:
+            job = self.get_job(file_path)
+            if job is None:
+                # 新任务：创建并认领
+                self.create_job(file_path)
+                self.update_job(file_path, JobStatus.RUNNING)
+                return True
+
+            if not resume:
+                # 非续传模式：允许重新处理（但 RUNNING 的跳过）
+                if job.status == JobStatus.RUNNING:
+                    return False
+                self.update_job(file_path, JobStatus.RUNNING)
+                return True
+
+            # 已完成或正在运行的任务跳过
+            if job.status in (JobStatus.COMPLETED, JobStatus.RUNNING):
+                return False
+
+            # 失败的任务最多重试 3 次
+            if job.status == JobStatus.FAILED and job.retry_count >= 3:
+                return False
+
+            # PENDING 或可重试的 FAILED：认领
+            self.update_job(file_path, JobStatus.RUNNING)
+            return True
 
     def get_pending_count(self) -> int:
         """获取待处理任务数量。"""

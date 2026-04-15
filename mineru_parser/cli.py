@@ -12,7 +12,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from mineru_parser import __version__
-from mineru_parser.api import parse_pdf_via_api_with_auto_split
+from mineru_parser.api import parse_pdf_via_api_with_auto_split, parse_pdfs_concurrent, reset_api_semaphore
 from mineru_parser.config import ConfigError, load_config
 from mineru_parser.markdown import regenerate_markdown_from_json
 from mineru_parser.pdf_splitter import get_pdf_info
@@ -155,6 +155,11 @@ def parse_cmd(
         "--pages",
         help="仅解析指定页码（从 1 计数），多个区间用逗号分隔，例如 10-20,30-40；超出总页数会自动裁剪并告警",
     ),
+    target_chunk_pages: int = typer.Option(
+        None,
+        "--target-chunk-pages",
+        help="自适应分片目标页数（0=仅超限切分，默认从配置读取；>0=始终切分到此大小以并发加速）",
+    ),
     config_path: Path | None = typer.Option(
         None,
         "-c",
@@ -212,6 +217,7 @@ def parse_cmd(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model_version = model or cfg.model_version
+    chunk_pages = target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
     markdown = parse_pdf_via_api_with_auto_split(
         pdf_path,
         tok,
@@ -225,6 +231,8 @@ def parse_cmd(
         cache_dir=cfg.cache_dir,
         use_cache=not ctx.obj["no_cache"],
         pages_spec=pages,
+        target_chunk_pages=chunk_pages,
+        api_rate_limit=cfg.api_rate_limit,
         **md_opts,
     )
     if markdown:
@@ -334,6 +342,16 @@ def batch_cmd(
         "--reset-failed",
         help="重置失败任务状态，重新尝试处理失败的文件",
     ),
+    concurrency: int = typer.Option(
+        None,
+        "--concurrency",
+        help="并发处理文件数（默认从配置读取，1 为顺序处理）",
+    ),
+    target_chunk_pages: int = typer.Option(
+        None,
+        "--target-chunk-pages",
+        help="自适应分片目标页数（0=仅超限切分，默认从配置读取；>0=始终切分到此大小以并发加速）",
+    ),
 ) -> None:
     """批量解析 PDF。"""
     _apply_subcommand_config(ctx, config_path)
@@ -379,17 +397,20 @@ def batch_cmd(
                 typer.echo(f"  - {pdf_path} ({num_pages} 页, {size_mb:.1f} MB)")
             except Exception as e:
                 typer.echo(f"  - {pdf_path} (无法获取信息: {e})")
-        typer.echo(f"\n汇总:")
+        typer.echo("\n汇总:")
         typer.echo(f"  文件数: {len(paths)}")
         typer.echo(f"  总页数: {total_pages}")
         typer.echo(f"  总大小: {total_size / 1024 / 1024:.1f} MB")
         typer.echo(f"  模型: {model_version}")
         typer.echo(f"  输出目录: {out_base}")
-        typer.echo(f"\n[DRY RUN] 未实际调用 API，以上仅为预览")
+        typer.echo("\n[DRY RUN] 未实际调用 API，以上仅为预览")
         raise typer.Exit(0)
 
     # Initialize state manager for resume capability
     state_file = get_state_file(input_path, out_base)
+    batch_conc = concurrency if concurrency is not None else cfg.batch_concurrency
+    chunk_pages = target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
+
     with BatchStateManager(state_file) as state:
         if reset_failed:
             reset_count = state.reset_failed()
@@ -419,56 +440,100 @@ def batch_cmd(
             raise typer.Exit(0)
 
         failed = 0
-        for pdf_path in tqdm(paths, desc="解析 PDF"):
-            pdf_str = str(pdf_path)
-            state.update_job(pdf_str, JobStatus.RUNNING)
-            out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
-            out_dir.mkdir(parents=True, exist_ok=True)
 
-            try:
-                result = parse_pdf_via_api_with_auto_split(
-                    pdf_path,
-                    tok,
-                    out_dir,
-                    cfg,
-                    base_url=cfg.base_url,
-                    model_version=model_version,
-                    poll_interval=cfg.poll_interval,
-                    max_wait=cfg.max_wait,
-                    cache_enabled=cfg.cache_enabled,
-                    cache_dir=cfg.cache_dir,
-                    use_cache=not ctx.obj["no_cache"],
-                    **md_opts,
+        if batch_conc <= 1:
+            # 顺序模式（传统行为）
+            for pdf_path in tqdm(paths, desc="解析 PDF"):
+                pdf_str = str(pdf_path)
+                state.update_job(pdf_str, JobStatus.RUNNING)
+                out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    result = parse_pdf_via_api_with_auto_split(
+                        pdf_path,
+                        tok,
+                        out_dir,
+                        cfg,
+                        base_url=cfg.base_url,
+                        model_version=model_version,
+                        poll_interval=cfg.poll_interval,
+                        max_wait=cfg.max_wait,
+                        cache_enabled=cfg.cache_enabled,
+                        cache_dir=cfg.cache_dir,
+                        use_cache=not ctx.obj["no_cache"],
+                        target_chunk_pages=chunk_pages,
+                        api_rate_limit=cfg.api_rate_limit,
+                        **md_opts,
+                    )
+                    if result:
+                        state.update_job(pdf_str, JobStatus.COMPLETED)
+                    else:
+                        state.update_job(pdf_str, JobStatus.FAILED, "解析返回空结果")
+                        failed += 1
+                except Exception as e:
+                    logger.error(f"处理失败 {pdf_path}: {e}")
+                    state.update_job(pdf_str, JobStatus.FAILED, str(e))
+                    failed += 1
+        else:
+            # 并发模式
+            reset_api_semaphore()
+
+            # 使用 try_start_job 原子化认领任务
+            pdf_tasks = []
+            task_paths = []
+            for pdf_path in paths:
+                pdf_str = str(pdf_path)
+                if state.try_start_job(pdf_str, resume=resume):
+                    out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    task_paths.append(pdf_path)
+                    pdf_tasks.append({
+                        "pdf_path": pdf_path,
+                        "token": tok,
+                        "output_dir": out_dir,
+                        "config": cfg,
+                        "target_chunk_pages": chunk_pages,
+                        "api_rate_limit": cfg.api_rate_limit,
+                        "base_url": cfg.base_url,
+                        "model_version": model_version,
+                        "poll_interval": cfg.poll_interval,
+                        "max_wait": cfg.max_wait,
+                        "cache_enabled": cfg.cache_enabled,
+                        "cache_dir": cfg.cache_dir,
+                        "use_cache": not ctx.obj["no_cache"],
+                        **md_opts,
+                    })
+
+            if not pdf_tasks:
+                logger.info("没有需要处理的文件")
+                raise typer.Exit(0)
+
+            logger.info(f"并发模式: {batch_conc} 个文件同时处理, API 并发限制 {cfg.api_rate_limit}")
+
+            with tqdm(total=len(pdf_tasks), desc="解析 PDF") as pbar:
+                def on_file_complete(idx, result):
+                    pbar.update(1)
+                    status = "OK" if result["success"] else "FAIL"
+                    name = Path(str(result["pdf_path"])).name[:30]
+                    pbar.set_postfix_str(f"{status}: {name}")
+
+                results = parse_pdfs_concurrent(
+                    pdf_tasks,
+                    batch_concurrency=batch_conc,
+                    api_rate_limit=cfg.api_rate_limit,
+                    on_complete=on_file_complete,
                 )
-                if result:
+
+            # 更新任务状态
+            for r in results:
+                pdf_str = str(r["pdf_path"])
+                if r["success"]:
                     state.update_job(pdf_str, JobStatus.COMPLETED)
                 else:
-                    state.update_job(pdf_str, JobStatus.FAILED, "解析返回空结果")
+                    err = r.get("error") or "解析返回空结果"
+                    state.update_job(pdf_str, JobStatus.FAILED, err)
                     failed += 1
-            except Exception as e:
-                logger.error(f"处理失败 {pdf_path}: {e}")
-                state.update_job(pdf_str, JobStatus.FAILED, str(e))
-                failed += 1
-
-    if failed:
-        out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        if not parse_pdf_via_api_with_auto_split(
-            pdf_path,
-            tok,
-            out_dir,
-            cfg,
-            base_url=cfg.base_url,
-            model_version=model_version,
-            poll_interval=cfg.poll_interval,
-            max_wait=cfg.max_wait,
-            cache_enabled=cfg.cache_enabled,
-            cache_dir=cfg.cache_dir,
-            use_cache=not ctx.obj["no_cache"],
-            **md_opts,
-        ):
-            failed += 1
 
     if failed:
         logger.warning(f"失败 {failed}/{len(paths)} 个文件")

@@ -161,3 +161,71 @@ def split_pdf_by_limits(
 
     logger.info(f"已切分为 {len(output_paths)} 个片段")
     return output_paths
+
+
+def split_pdf_adaptive(
+    pdf_path: Path,
+    target_chunk_pages: int,
+    page_limit: int,
+    size_limit_bytes: int,
+    temp_dir: Path,
+) -> list[Path]:
+    """
+    自适应分片：当 PDF 页数超过 ``target_chunk_pages`` 时切分为该大小的片段，
+    即使未超出硬限制（page_limit / file_size_limit_mb），从而并发调用 API 加速解析。
+
+    若 ``target_chunk_pages <= 0`` 或 PDF 页数不超过该值，委托给
+    :func:`split_pdf_by_limits`（传统行为）。
+
+    :param pdf_path: 源 PDF 路径
+    :param target_chunk_pages: 自适应分片目标页数（>0 时启用）
+    :param page_limit: 每片最大页数（硬限制）
+    :param size_limit_bytes: 每片最大字节数（硬限制）
+    :param temp_dir: 临时目录，用于存放切分后的 PDF
+    :return: 切分后的 PDF 路径列表
+    """
+    num_pages, size_bytes = get_pdf_info(pdf_path)
+
+    # 未启用自适应分片，或 PDF 页数不超过目标值：走传统逻辑
+    if target_chunk_pages <= 0 or num_pages <= target_chunk_pages:
+        return split_pdf_by_limits(pdf_path, page_limit, size_limit_bytes, temp_dir)
+
+    # 未超限且不需要自适应分片的情况已在上面处理
+    logger.info(
+        f"自适应分片：{num_pages} 页，目标每片 {target_chunk_pages} 页"
+    )
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    stem = pdf_path.stem
+    reader = PdfReader(str(pdf_path))
+
+    # 计算每片页数：优先使用 target_chunk_pages，再检查大小限制
+    pages_per_chunk = target_chunk_pages
+    avg_bytes_per_page = size_bytes / num_pages if num_pages else 0
+    if avg_bytes_per_page > 0 and pages_per_chunk * avg_bytes_per_page > size_limit_bytes:
+        pages_per_chunk = max(1, int(size_limit_bytes / avg_bytes_per_page))
+        logger.info(f"按大小限制调整每片页数为 {pages_per_chunk}")
+
+    # 同时也不能超过 page_limit
+    pages_per_chunk = min(pages_per_chunk, page_limit)
+
+    output_paths: list[Path] = []
+    start = 0
+    chunk_idx = 0
+
+    while start < num_pages:
+        end = min(start + pages_per_chunk, num_pages)
+        writer = PdfWriter()
+        for i in range(start, end):
+            writer.add_page(reader.pages[i])
+
+        out_path = temp_dir / f"{stem}_part{chunk_idx}.pdf"
+        writer.write(str(out_path))
+        output_paths.append(out_path)
+        logger.debug(f"已切分: {out_path.name} (页 {start + 1}-{end})")
+
+        start = end
+        chunk_idx += 1
+
+    logger.info(f"自适应分片完成：{len(output_paths)} 个片段")
+    return output_paths

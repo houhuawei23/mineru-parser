@@ -15,8 +15,11 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     assert cfg.model_version == "vlm"
     assert cfg.markdown.include_footnote is True
     assert cfg.markdown.include_header is False
-    assert cfg.page_limit == 100
+    assert cfg.page_limit == 50
     assert cfg.max_workers == 20
+    assert cfg.target_chunk_pages == 0
+    assert cfg.api_rate_limit == 5
+    assert cfg.batch_concurrency == 1
 
 
 def test_load_config_explicit_missing_raises() -> None:

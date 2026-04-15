@@ -11,6 +11,34 @@ from mineru_parser.cli import app
 runner = CliRunner()
 
 
+def _make_mock_config(**overrides) -> Mock:
+    """创建包含所有必要属性的 mock Config 对象。"""
+    mock_config = Mock()
+    mock_config.token = "test_token"
+    mock_config.model_version = "vlm"
+    mock_config.base_url = "https://api.example.com"
+    mock_config.poll_interval = 10
+    mock_config.max_wait = 1200
+    mock_config.cache_enabled = True
+    mock_config.cache_dir = overrides.pop("cache_dir", Path("/tmp/cache"))
+    mock_config.markdown.include_header = False
+    mock_config.markdown.include_footer = False
+    mock_config.markdown.include_page_number = False
+    mock_config.markdown.include_footnote = True
+    mock_config.markdown.merge_paragraphs = True
+    mock_config.markdown.inline_footnotes = True
+    mock_config.output_parsed_suffix = "_parsed"
+    mock_config.batch_include_pattern = "*.pdf"
+    mock_config.batch_exclude_pattern = ""
+    # 新增属性：自适应分片与并发
+    mock_config.target_chunk_pages = 0
+    mock_config.api_rate_limit = 5
+    mock_config.batch_concurrency = 1
+    for k, v in overrides.items():
+        setattr(mock_config, k, v)
+    return mock_config
+
+
 class TestMainCallback:
     """测试主回调和全局选项。"""
 
@@ -19,7 +47,7 @@ class TestMainCallback:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "mineru-parse" in result.output
-        assert "1.0.0" in result.output
+        assert "1.2.0" in result.output
 
     def test_help_shows_commands(self) -> None:
         """验证 --help 显示所有命令。"""
@@ -65,8 +93,7 @@ class TestParseCommand:
     @patch("mineru_parser.cli.load_config")
     def test_parse_missing_file_exits_error(self, mock_load_config) -> None:
         """验证文件不存在时返回错误。"""
-        mock_config = Mock()
-        mock_config.token = "test_token"
+        mock_config = _make_mock_config()
         mock_load_config.return_value = mock_config
 
         result = runner.invoke(app, ["parse", "/nonexistent/file.pdf"])
@@ -79,8 +106,7 @@ class TestParseCommand:
         txt_file = tmp_path / "test.txt"
         txt_file.write_text("not a pdf")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
+        mock_config = _make_mock_config()
         mock_load_config.return_value = mock_config
 
         result = runner.invoke(app, ["parse", str(txt_file)])
@@ -104,22 +130,7 @@ class TestParseCommand:
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
 
-        # Mock config
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.model_version = "vlm"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         # Mock successful parse
@@ -138,21 +149,7 @@ class TestParseCommand:
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.model_version = "vlm"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         mock_parse.return_value = "# Parsed Content"
@@ -251,23 +248,7 @@ class TestBatchCommand:
         input_dir = tmp_path / "empty"
         input_dir.mkdir()
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         result = runner.invoke(app, ["batch", "-i", str(input_dir)])
@@ -288,23 +269,7 @@ class TestBatchCommand:
             pdf = input_dir / f"test{i}.pdf"
             pdf.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         mock_parse.return_value = "# Parsed Content"
@@ -326,23 +291,7 @@ class TestBatchCommand:
             pdf = input_dir / f"test{i}.pdf"
             pdf.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         # All succeed to avoid StopIteration issues with side_effect
@@ -365,23 +314,7 @@ class TestBatchCommand:
         (input_dir / "root.pdf").write_bytes(b"fake pdf")
         (sub_dir / "nested.pdf").write_bytes(b"fake pdf")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         mock_parse.return_value = "# Parsed"
@@ -406,12 +339,7 @@ class TestDryRun:
             pdf = input_dir / f"test{i}.pdf"
             pdf.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config()
         mock_load_config.return_value = mock_config
 
         result = runner.invoke(app, ["--dry-run", "batch", "-i", str(input_dir)])
@@ -432,12 +360,7 @@ class TestDryRun:
         pdf = input_dir / "test.pdf"
         pdf.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config()
         mock_load_config.return_value = mock_config
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:
@@ -462,23 +385,7 @@ class TestResumeCapability:
             pdf = input_dir / f"test{i}.pdf"
             pdf.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         mock_parse.return_value = "# Parsed"
@@ -504,23 +411,7 @@ class TestResumeCapability:
         pdf = input_dir / "test.pdf"
         pdf.write_bytes(b"fake pdf content")
 
-        mock_config = Mock()
-        mock_config.token = "test_token"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
-        mock_config.batch_include_pattern = "*.pdf"
-        mock_config.batch_exclude_pattern = ""
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
         mock_load_config.return_value = mock_config
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:
@@ -541,21 +432,10 @@ class TestConfigHandling:
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf")
 
-        mock_config = Mock()
-        mock_config.token = "TEST_TOKEN_PLACEHOLDER"
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
+        mock_config = _make_mock_config(
+            token="TEST_TOKEN_PLACEHOLDER",
+            cache_dir=tmp_path / "cache",
+        )
         mock_load_config.return_value = mock_config
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:
@@ -571,21 +451,10 @@ class TestConfigHandling:
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf")
 
-        mock_config = Mock()
-        mock_config.token = "from_config"  # Should be overridden
-        mock_config.model_version = "vlm"
-        mock_config.base_url = "https://api.example.com"
-        mock_config.poll_interval = 10
-        mock_config.max_wait = 1200
-        mock_config.cache_enabled = True
-        mock_config.cache_dir = tmp_path / "cache"
-        mock_config.markdown.include_header = False
-        mock_config.markdown.include_footer = False
-        mock_config.markdown.include_page_number = False
-        mock_config.markdown.include_footnote = True
-        mock_config.markdown.merge_paragraphs = True
-        mock_config.markdown.inline_footnotes = True
-        mock_config.output_parsed_suffix = "_parsed"
+        mock_config = _make_mock_config(
+            token="from_config",
+            cache_dir=tmp_path / "cache",
+        )
         mock_load_config.return_value = mock_config
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:

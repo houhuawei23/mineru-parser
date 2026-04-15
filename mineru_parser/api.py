@@ -15,23 +15,52 @@ from loguru import logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# 默认 API 并发限制（信号量）
-DEFAULT_API_RATE_LIMIT = 5
-
 from mineru_parser.cache import get_cached_zip, save_to_cache
 from mineru_parser.markdown import build_markdown_from_zip, merge_markdown_parts
 from mineru_parser.pdf_splitter import (
     extract_pages_to_pdf,
     get_pdf_info,
     parse_pages_spec,
+    split_pdf_adaptive,
     split_pdf_by_limits,
 )
 
 if TYPE_CHECKING:
     from mineru_parser.config import Config
 
+# 默认 API 并发限制（信号量）
+DEFAULT_API_RATE_LIMIT = 5
+
 # Thread-local storage for sessions to ensure thread safety
 _thread_local = threading.local()
+
+# Shared API rate-limiting semaphore (lazy singleton)
+_api_semaphore: threading.Semaphore | None = None
+_semaphore_lock = threading.Lock()
+
+
+def get_api_semaphore(limit: int = DEFAULT_API_RATE_LIMIT) -> threading.Semaphore:
+    """
+    获取共享的 API 速率限制信号量（懒加载单例）。
+
+    在分片片段和批量文件之间共享，确保总并发 API 调用数不超过 limit。
+
+    :param limit: 信号量许可数（默认 5）
+    :return: 共享 Semaphore 实例
+    """
+    global _api_semaphore
+    if _api_semaphore is None:
+        with _semaphore_lock:
+            if _api_semaphore is None:
+                _api_semaphore = threading.Semaphore(limit)
+    return _api_semaphore
+
+
+def reset_api_semaphore() -> None:
+    """重置共享信号量（用于测试或重新配置）。"""
+    global _api_semaphore
+    with _semaphore_lock:
+        _api_semaphore = None
 
 
 def get_headers(token: str) -> dict:
@@ -113,7 +142,7 @@ def apply_upload_urls(
         file_urls = data_obj.get("file_urls") or data_obj.get("files")
         batch_id = data_obj.get("batch_id")
         if not batch_id or not file_urls:
-            logger.error(f"响应中缺少 batch_id 或 file_urls")
+            logger.error("响应中缺少 batch_id 或 file_urls")
             return None
         return {"batch_id": batch_id, "file_urls": file_urls}
     except requests.RequestException as e:
@@ -385,6 +414,7 @@ def parse_pdf_via_api_with_auto_split(
     page_limit: int = 0,
     max_workers: int = 0,
     api_rate_limit: int = DEFAULT_API_RATE_LIMIT,
+    target_chunk_pages: int = 0,
     base_url: str = "",
     model_version: str = "",
     poll_interval: int = 0,
@@ -407,12 +437,15 @@ def parse_pdf_via_api_with_auto_split(
     :param page_limit: 每片页数，默认 100
     :param max_workers: 最大并发线程数，默认 20
     :param api_rate_limit: API 并发限制（信号量），默认 5
+    :param target_chunk_pages: 自适应分片目标页数，0=仅超限切分（默认），>0=始终切分到此大小
     :param pages_spec: 可选，仅解析指定页，格式如 ``10-20,30-40``（1-based，与 CLI --pages 一致）
     :return: markdown 字符串，失败返回 None
     """
     file_size_limit_mb = file_size_limit_mb or config.file_size_limit_mb
     page_limit = page_limit or config.page_limit
     max_workers = max_workers or config.max_workers
+    target_chunk_pages = target_chunk_pages or config.target_chunk_pages
+    api_rate_limit = api_rate_limit or config.api_rate_limit
     base_url = base_url or config.base_url
     model_version = model_version or config.model_version
     poll_interval = poll_interval or config.poll_interval
@@ -482,6 +515,7 @@ def parse_pdf_via_api_with_auto_split(
             cache_dir=cache_dir,
             use_cache=use_cache,
             api_rate_limit=api_rate_limit,
+            target_chunk_pages=target_chunk_pages,
         )
     finally:
         if temp_extracted is not None:
@@ -513,8 +547,16 @@ def _parse_pdf_via_api_with_auto_split_body(
     cache_dir: Path | None,
     use_cache: bool,
     api_rate_limit: int = DEFAULT_API_RATE_LIMIT,
+    target_chunk_pages: int = 0,
 ) -> str | None:
-    if num_pages <= page_limit and size_bytes <= size_limit_bytes:
+    # 判断是否需要切分
+    needs_split = (
+        (target_chunk_pages > 0 and num_pages > target_chunk_pages)
+        or num_pages > page_limit
+        or size_bytes > size_limit_bytes
+    )
+
+    if not needs_split:
         return parse_pdf_via_api(
             working_pdf,
             token,
@@ -540,12 +582,22 @@ def _parse_pdf_via_api_with_auto_split_body(
     # 需要切分：片段输出到临时目录，合并后仅保留 xx.md 和 images/
     with tempfile.TemporaryDirectory(prefix=config.temp_dir_prefix) as tmp:
         temp_dir = Path(tmp)
-        split_paths = split_pdf_by_limits(
-            working_pdf,
-            page_limit=page_limit,
-            size_limit_bytes=size_limit_bytes,
-            temp_dir=temp_dir,
-        )
+
+        if target_chunk_pages > 0 and num_pages > target_chunk_pages:
+            split_paths = split_pdf_adaptive(
+                working_pdf,
+                target_chunk_pages=target_chunk_pages,
+                page_limit=page_limit,
+                size_limit_bytes=size_limit_bytes,
+                temp_dir=temp_dir,
+            )
+        else:
+            split_paths = split_pdf_by_limits(
+                working_pdf,
+                page_limit=page_limit,
+                size_limit_bytes=size_limit_bytes,
+                temp_dir=temp_dir,
+            )
 
         md_opts = dict(
             include_header=include_header,
@@ -570,8 +622,8 @@ def _parse_pdf_via_api_with_auto_split_body(
 
         part_results: dict[int, Path] = {}
 
-        # 使用信号量限制并发 API 调用数
-        api_semaphore = threading.Semaphore(api_rate_limit)
+        # 使用共享信号量限制并发 API 调用数
+        api_semaphore = get_api_semaphore(api_rate_limit)
 
         def parse_one(idx: int, part_path: Path) -> tuple[int, Path | None]:
             with api_semaphore:
@@ -638,3 +690,54 @@ def _clean_output_dir(
                 item.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+def parse_pdfs_concurrent(
+    pdf_tasks: list[dict],
+    batch_concurrency: int = 3,
+    api_rate_limit: int = DEFAULT_API_RATE_LIMIT,
+    on_complete=None,
+) -> list[dict]:
+    """
+    并发处理多个 PDF 文件，共享 API 速率限制信号量。
+
+    每个 ``pdf_tasks`` 元素是传给 :func:`parse_pdf_via_api_with_auto_split` 的参数字典。
+    ``api_rate_limit`` 信号量在所有文件及其分片之间共享，确保总并发 API 调用数受控。
+
+    :param pdf_tasks: 任务参数列表，每个元素为 parse_pdf_via_api_with_auto_split 的关键字参数
+    :param batch_concurrency: 同时处理的文件数
+    :param api_rate_limit: API 并发信号量许可数
+    :param on_complete: 完成回调 ``on_complete(idx, result_dict)``，用于 tqdm 等进度展示
+    :return: 结果列表，每个元素为 ``{pdf_path, success, markdown, error}``
+    """
+    # 确保共享信号量已初始化
+    get_api_semaphore(api_rate_limit)
+
+    results: list[dict | None] = [None] * len(pdf_tasks)
+
+    def process_one(idx: int, task: dict) -> None:
+        try:
+            md = parse_pdf_via_api_with_auto_split(**task)
+            result = {
+                "pdf_path": task["pdf_path"],
+                "success": md is not None,
+                "markdown": md,
+                "error": None if md is not None else "解析返回空结果",
+            }
+        except Exception as e:
+            result = {
+                "pdf_path": task["pdf_path"],
+                "success": False,
+                "markdown": None,
+                "error": str(e),
+            }
+        results[idx] = result
+        if on_complete is not None:
+            on_complete(idx, result)
+
+    with ThreadPoolExecutor(max_workers=batch_concurrency) as ex:
+        futures = [ex.submit(process_one, i, t) for i, t in enumerate(pdf_tasks)]
+        for fut in as_completed(futures):
+            fut.result()  # 传播异常
+
+    return results

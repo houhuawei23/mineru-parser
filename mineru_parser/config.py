@@ -111,11 +111,11 @@ def load_config(config_path: Path | None = None) -> "Config":
             raise ConfigError(f"用户配置文件解析失败 {cwd_user}: {e}") from e
 
     # 环境变量覆盖 token（高于工作目录 config.yml）
-    env_token = os.environ.get(
+    _env_tok = os.environ.get(
         _get_nested(data, "config.env_token_var", "MINERU_TOKEN"), ""
     ).strip()
-    if env_token:
-        _set_nested(data, "api.token", env_token)
+    if _env_tok:
+        _set_nested(data, "api.token", _env_tok)
 
     # 命令行 -c 指定的文件（最高优先级，覆盖上述各层）
     if config_path is not None:
@@ -201,6 +201,8 @@ class Config:
         self.max_workers = int(split_cfg.get("max_workers", 20))
         self.temp_dir_prefix = str(split_cfg.get("temp_dir_prefix", "mineru_split_"))
         self.part_md_name = str(split_cfg.get("part_md_name", "full.md"))
+        self.target_chunk_pages = int(split_cfg.get("target_chunk_pages", 0))
+        self.api_rate_limit = int(split_cfg.get("api_rate_limit", 5))
 
         self.cache_enabled = bool(cache_cfg.get("enabled", True))
         self.cache_dir = Path(str(cache_cfg.get("dir", "~/.cache/mineru_parser")))
@@ -224,6 +226,7 @@ class Config:
         batch_cfg = data.get("batch") or {}
         self.batch_include_pattern = str(batch_cfg.get("include_pattern", "*.pdf"))
         self.batch_exclude_pattern = str(batch_cfg.get("exclude_pattern", ""))
+        self.batch_concurrency = int(batch_cfg.get("batch_concurrency", 1))
 
         pdf_dl = data.get("pdf_download") or {}
         self.pdf_download_timeout = int(pdf_dl.get("timeout", 120))

@@ -8,6 +8,8 @@
 - 解析本地 PDF 或 arXiv URL 到 Markdown
 - 支持页眉、页脚、页码、脚注控制
 - 大文件自动分片并发解析与合并
+- **自适应分片**：按目标页数切分 PDF 并发调用 API，大幅加速解析
+- **批量并发**：多文件同时处理，共享 API 速率限制
 - **连接池优化**：HTTP 连接复用，提升批量处理性能
 - **智能缓存**：基于文件哈希的解析结果缓存，避免重复调用 API
 - **并行图片处理**：CPU 密集型图片转换使用多进程加速
@@ -108,6 +110,15 @@ mineru-parse batch -i ./pdfs -o ./outputs -r --reset-failed
 
 # 模拟运行（预览不实际调用 API）
 mineru-parse batch -i ./pdfs -o ./outputs -r --dry-run
+
+# 自适应分片加速（将 PDF 切分为 20 页片段并发解析）
+mineru-parse parse ./paper.pdf --target-chunk-pages 20
+
+# 批量并发（同时处理 3 个文件）
+mineru-parse batch -i ./pdfs -o ./outputs --concurrency 3
+
+# 自适应分片 + 批量并发组合使用
+mineru-parse batch -i ./pdfs -o ./outputs --concurrency 3 --target-chunk-pages 20
 ```
 
 ### 6) 从 JSON 再生 Markdown
@@ -152,6 +163,7 @@ mineru-parse from-json --help
 | `--page-number` | 添加页码 |
 | `--no-footnote` | 关闭脚注 |
 | `--pages` | 仅解析指定页（如 `10-20,30-40`） |
+| `--target-chunk-pages` | 自适应分片目标页数（0=仅超限切分，>0=始终切分到此大小） |
 
 ### batch 命令参数
 
@@ -164,6 +176,8 @@ mineru-parse from-json --help
 | `-E, --exclude` | 排除的文件模式（正则） |
 | `--resume` | 断点续传模式 |
 | `--reset-failed` | 重置失败任务状态 |
+| `--concurrency` | 并发处理文件数（默认从配置读取，1=顺序） |
+| `--target-chunk-pages` | 自适应分片目标页数（0=仅超限切分，>0=始终切分到此大小） |
 
 ## 配置说明
 
@@ -190,10 +204,16 @@ cache:
   dir: "~/.cache/mineru_parser"      # 缓存目录
 
 split:
-  page_limit: 100                    # 每片最大页数
+  page_limit: 50                     # 每片最大页数
   file_size_limit_mb: 200            # 文件大小限制（MB）
   max_workers: 20                    # 并发线程数
-  api_rate_limit: 5                  # API 并发限制
+  api_rate_limit: 5                  # API 并发限制（跨文件/分片共享）
+  target_chunk_pages: 0              # 自适应分片目标页数（0=仅超限切分）
+
+batch:
+  include_pattern: "*.pdf"
+  exclude_pattern: ""
+  batch_concurrency: 1               # 批量并发文件数（1=顺序，>1=并发）
 
 markdown:
   include_header: false              # 包含页眉
@@ -239,7 +259,9 @@ pytest --cov=mineru_parser --cov-report=html
 1. **HTTP 连接池**：复用 TCP 连接，减少 SSL 握手开销
 2. **哈希缓存**：PDF 文件哈希结果 LRU 缓存，避免重复计算
 3. **并行图片处理**：图片格式转换使用多进程加速
-4. **API 速率限制**：内置信号量控制并发，避免触发服务端限流
+4. **API 速率限制**：共享信号量控制跨文件/分片的总并发 API 调用数
+5. **自适应分片**：按目标页数切分 PDF，多片段并发调用 API，单文件解析速度提升约 N 倍（N=min(分片数, api_rate_limit)）
+6. **批量并发**：多文件同时处理，共享 API 信号量，批量处理速度提升约 batch_concurrency 倍
 
 ## 常见问题
 
@@ -265,6 +287,18 @@ pytest --cov=mineru_parser --cov-report=html
 - 建议定期轮换 Token
 
 ## 版本历史
+
+### v1.2.0 (2025-04-15)
+
+- 新增：自适应分片（`--target-chunk-pages`），按目标页数切分 PDF 并发调用 API 加速解析
+- 新增：批量并发处理（`--concurrency`），多文件同时处理共享 API 速率限制
+- 新增：`parse_pdfs_concurrent()` 并发批量处理函数
+- 新增：共享 API 信号量（`get_api_semaphore`），跨文件/分片统一控制并发数
+- 新增：`split_pdf_adaptive()` 自适应分片函数
+- 新增：`try_start_job()` 原子化任务认领，防止并发批处理竞争
+- 改进：状态管理启用 WAL 模式，提升并发写入性能
+- 修复：移除 batch 命令中 L453-471 的死代码（引用失效变量并重复调用 API）
+- 测试：85 个测试全部通过
 
 ### v1.1.0 (2025-04-06)
 

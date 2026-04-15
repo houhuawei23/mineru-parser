@@ -61,7 +61,7 @@ CLI (cli.py)
     ↓
 parse_pdf_via_api_with_auto_split() (api.py)
     ↓
-[If PDF exceeds limits] → split_pdf_by_limits() (pdf_splitter.py)
+[If adaptive split enabled or PDF exceeds limits] → split_pdf_adaptive() / split_pdf_by_limits() (pdf_splitter.py)
     ↓
 parse_pdf_via_api() (api.py) - handles caching
     ↓
@@ -70,19 +70,29 @@ parse_pdf_via_api() (api.py) - handles caching
 build_markdown_from_zip() (markdown.py)
     ↓
 [If split] merge_markdown_parts() (markdown.py)
+
+Batch mode (concurrency > 1):
+parse_pdfs_concurrent() (api.py)
+    ↓
+ThreadPoolExecutor → N × parse_pdf_via_api_with_auto_split()
+    ↓
+[Shared API semaphore limits total concurrent API calls]
 ```
 
 ### Key Components
 
 **API Module (api.py)**
 - `parse_pdf_via_api()`: Core function for single PDF processing with caching support
-- `parse_pdf_via_api_with_auto_split()`: Handles large PDFs by splitting and concurrent processing
+- `parse_pdf_via_api_with_auto_split()`: Handles PDFs by splitting and concurrent processing, supports adaptive splitting via `target_chunk_pages`
+- `parse_pdfs_concurrent()`: Processes multiple PDF files concurrently with shared API semaphore
+- `get_api_semaphore()` / `reset_api_semaphore()`: Shared API rate-limiting semaphore (lazy singleton)
 - Uses `ThreadPoolExecutor` for concurrent fragment processing
 - **Connection Pooling**: Uses `requests.Session()` with `HTTPAdapter` for connection reuse. Sessions are stored in thread-local storage (`_thread_local`) for thread safety.
 - **Session Management**: `get_session()` returns a pooled session; `close_session()` cleans up the current thread's session
 
 **PDF Splitter (pdf_splitter.py)**
-- `split_pdf_by_limits()`: Splits PDFs by page count and file size
+- `split_pdf_by_limits()`: Splits PDFs by page count and file size (only when exceeding limits)
+- `split_pdf_adaptive()`: Adaptive splitting — splits PDFs into `target_chunk_pages` chunks even when within limits, for concurrent API acceleration
 - `parse_pages_spec()`: Parses CLI page range syntax (e.g., "10-20,30-40")
 - `extract_pages_to_pdf()`: Extracts specific pages to a new PDF
 
@@ -130,10 +140,11 @@ The API module uses `requests.Session()` with connection pooling for better perf
 - Never commit real tokens to the repository
 
 ### Rate Limiting
-- API concurrency is controlled by `api_rate_limit` (default 5) using `threading.Semaphore`
-- Limits concurrent API calls to prevent overwhelming the MinerU API
+- API concurrency is controlled by `api_rate_limit` (default 5) using a shared `threading.Semaphore`
+- Limits total concurrent API calls across all files and their split fragments
+- Shared via `get_api_semaphore()` lazy singleton — ensures one global limit
 - Separate from `max_workers` which controls thread pool size for I/O operations
-- Only applies to split PDF processing; single PDF processing is naturally sequential
+- Applies to both split PDF fragment processing and concurrent batch file processing
 
 ### Parallel Image Processing
 - Image conversion uses `ProcessPoolExecutor` (default 4 workers) for CPU-bound PIL operations
@@ -142,9 +153,17 @@ The API module uses `requests.Session()` with connection pooling for better perf
 - Failed conversions are logged and removed from references
 
 ### Large File Handling
-- Files exceeding `split.file_size_limit_mb` (default 200MB) or `split.page_limit` (default 100 pages) are automatically split
+- Files exceeding `split.file_size_limit_mb` (default 200MB) or `split.page_limit` (default 50 pages) are automatically split
+- **Adaptive splitting**: When `split.target_chunk_pages > 0`, PDFs with more pages than this value are always split, even if within hard limits — enabling concurrent API calls for faster processing
 - Each fragment is processed concurrently with `max_workers` (default 20) threads
 - Results are merged with image renumbering to avoid conflicts
+
+### Batch Concurrency
+- `batch.batch_concurrency` (default 1) controls how many PDF files are processed concurrently
+- When `batch_concurrency > 1`, uses `parse_pdfs_concurrent()` with a shared API semaphore
+- The shared semaphore ensures total in-flight API calls across all files/chunks is bounded by `api_rate_limit`
+- `--concurrency` CLI option overrides config; `--target-chunk-pages` enables adaptive splitting per run
+- State manager uses `try_start_job()` for atomic claim-and-mark-RUNNING to prevent race conditions
 
 ### Caching
 - Enabled by default, disable with `--no-cache`

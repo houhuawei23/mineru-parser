@@ -43,6 +43,13 @@ split:
   temp_dir_prefix: "mineru_split_"
   # 片段中间输出 md 文件名（合并前各片段的 md）
   part_md_name: "full.md"
+  # 自适应分片目标页数：>0 时，页数超过此值的 PDF 始终切分为此大小的片段，
+  # 即使未超出 page_limit/file_size_limit_mb，从而并发调用 API 加速解析。
+  # 设为 0 则仅超限时切分（传统行为）。
+  # 例：设为 20，则 100 页的 PDF 切分为 5 个并发 API 调用。
+  target_chunk_pages: 0
+  # API 并发信号量：限制同时在进行的 API 调用数（分片片段和批量文件共享）
+  api_rate_limit: 5
 
 # ==================== 缓存 ====================
 cache:
@@ -82,6 +89,9 @@ batch:
   include_pattern: "*.pdf"
   # 排除的文件模式（正则）
   exclude_pattern: ""
+  # 批量并发文件数：同时处理的 PDF 文件数。1=顺序处理（传统行为），>1=并发处理。
+  # 每个文件可能自身又切分为多个片段（由 api_rate_limit 控制总并发 API 调用数）。
+  batch_concurrency: 1
 
 # ==================== PDF 下载（URL/arXiv） ====================
 pdf_download:
