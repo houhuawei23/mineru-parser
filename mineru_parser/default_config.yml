@@ -36,7 +36,7 @@ split:
   # 文件大小限制（MB），超限时自动切分
   file_size_limit_mb: 200.0
   # 每片最大页数
-  page_limit: 100
+  page_limit: 50
   # 最大并发批次数
   max_workers: 20
   # 临时目录前缀（用于切分时的 temp dir）
