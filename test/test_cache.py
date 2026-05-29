@@ -2,9 +2,8 @@
 
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
-import pytest
 
 from mineru_parser.cache import (
     _compute_pdf_hash,

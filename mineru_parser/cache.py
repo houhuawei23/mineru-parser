@@ -1,7 +1,6 @@
 """解析结果缓存模块：基于 PDF 内容哈希缓存 zip，避免重复调用 API。"""
 
 import hashlib
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING

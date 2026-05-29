@@ -288,6 +288,16 @@ pytest --cov=mineru_parser --cov-report=html
 
 ## 版本历史
 
+### v1.2.1 (2026-05-29)
+
+- **修复**：PDF 解析时 `code` 类型块的标题（`code_caption`）丢失问题
+  - v1 JSON (`content_list.json`)：`_extract_text_from_content_list_item` 现在会提取 `code_caption` 并与 `code_body` 一起输出
+  - v2 JSON (`content_list_v2.json`)：新增 `_get_code_caption_from_content_v2` 和 `_get_code_content_from_content_v2`，`_convert_v2_to_content_blocks` 增加对 `type == "code"` 的专门处理
+- **修复**：v1 JSON 中 `code_body` 已包含 ` ``` ` 标记却被二次包裹，导致输出中出现嵌套代码块的问题
+- **代码清理**：使用 ruff 修复未使用导入（`F401`、`F841`）等 lint 问题
+- 测试：85 个测试全部通过
+- Wrapped up by kimi-cli (kimi-k2.6)
+
 ### v1.2.0 (2025-04-15)
 
 - 新增：自适应分片（`--target-chunk-pages`），按目标页数切分 PDF 并发调用 API 加速解析

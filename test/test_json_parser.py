@@ -4,12 +4,10 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from mineru_parser.json_parser import (
     find_content_list_json,
     content_list_json_to_markdown,
-    content_list_v2_to_markdown,
     _extract_text_from_content_list_item,
 )
 

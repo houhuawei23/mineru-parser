@@ -3,7 +3,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
 from PIL import Image
 
 from mineru_parser.image_processor import extract_image_refs, process_images

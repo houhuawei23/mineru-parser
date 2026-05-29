@@ -5,7 +5,6 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from loguru import logger
 
@@ -70,7 +69,12 @@ def _extract_text_from_content_list_item(item: dict) -> str:
         return f"**{cap_text}**\n\n{body}" if cap_text else body
     if t == "code":
         body = item.get("code_body", "")
-        return f"```\n{body}\n```"
+        caption = item.get("code_caption", [])
+        cap_text = " ".join(caption).strip() if caption else ""
+        # code_body 通常已包含 ```language\n...\n```，直接返回
+        if cap_text:
+            return f"{cap_text}\n\n{body}"
+        return body
     if t == "image":
         img_path = item.get("img_path", "")
         captions = item.get("image_caption", [])
@@ -357,7 +361,7 @@ def _get_text_from_content_v2(content: dict) -> str:
     if not content:
         return ""
     parts: list[str] = []
-    for key in ["paragraph_content", "title_content", "page_number_content", "page_footnote_content"]:
+    for key in ["paragraph_content", "title_content", "page_number_content", "page_footnote_content", "code_caption", "code_content"]:
         if key in content and isinstance(content[key], list):
             for c in content[key]:
                 if isinstance(c, dict):
@@ -369,6 +373,40 @@ def _get_text_from_content_v2(content: dict) -> str:
                     else:
                         parts.append(c.get("content", ""))
     return " ".join(parts).strip()
+
+
+def _get_code_caption_from_content_v2(content: dict) -> str:
+    """从 content_list_v2 的 content 中提取 code_caption 文本。"""
+    if not content:
+        return ""
+    parts: list[str] = []
+    for key in ["code_caption"]:
+        if key in content and isinstance(content[key], list):
+            for c in content[key]:
+                if isinstance(c, dict):
+                    ct = c.get("type", "")
+                    if ct == "text":
+                        parts.append(c.get("content", ""))
+                    else:
+                        parts.append(c.get("content", ""))
+    return " ".join(parts).strip()
+
+
+def _get_code_content_from_content_v2(content: dict) -> str:
+    """从 content_list_v2 的 content 中提取 code_content 文本。"""
+    if not content:
+        return ""
+    parts: list[str] = []
+    for key in ["code_content"]:
+        if key in content and isinstance(content[key], list):
+            for c in content[key]:
+                if isinstance(c, dict):
+                    ct = c.get("type", "")
+                    if ct == "text":
+                        parts.append(c.get("content", ""))
+                    else:
+                        parts.append(c.get("content", ""))
+    return "\n".join(parts)
 
 
 def _is_plain_paragraph_v2(item: dict) -> bool:
@@ -418,6 +456,17 @@ def _convert_v2_to_content_blocks(
                     ).strip()
                     if line:
                         page_blocks.append((f"- {line}", item, False))
+            elif t == "code":
+                caption = _get_code_caption_from_content_v2(content)
+                code_body = _get_code_content_from_content_v2(content)
+                lang = content.get("code_language", "") if isinstance(content, dict) else ""
+                md_parts: list[str] = []
+                if caption:
+                    md_parts.append(caption)
+                if code_body:
+                    md_parts.append(f"```{lang}\n{code_body}\n```")
+                if md_parts:
+                    page_blocks.append(("\n\n".join(md_parts), item, False))
             elif t == "table" or text:
                 page_blocks.append((text, item, False))
 
