@@ -11,6 +11,8 @@ from loguru import logger
 # 脚注引用符号（①②③④⑤⑥⑦⑧⑨⑩）
 FOOTNOTE_REFS = "①②③④⑤⑥⑦⑧⑨⑩"
 FOOTNOTE_REF_PATTERN = re.compile(f"[{FOOTNOTE_REFS}]")
+# LaTeX 上标脚注引用格式：$^{1}$, $^{2}$ 等
+LATEX_FOOTNOTE_REF_PATTERN = re.compile(r"\$\^\{(\d+)\}\$")
 # 句末标点：用于判断段落是否可在跨页时合并
 SENTENCE_END_CHARS = "。！？；：」\""
 
@@ -134,15 +136,35 @@ def _sort_items_by_reading_order(items: list[dict]) -> list[dict]:
     return sorted(items, key=key_fn)
 
 
+def _detect_language(text: str) -> str:
+    """检测文本主要语言，返回 'zh' 或 'en'。"""
+    if not text:
+        return "zh"
+    # 统计中文字符数量
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    total_chars = len(re.findall(r'[\w]', text))
+    if total_chars == 0:
+        return "zh"
+    # 中文字符占比超过 10% 视为中文内容
+    return "zh" if chinese_chars / total_chars > 0.1 else "en"
+
+
 def _extract_footnote_refs(text: str) -> list[str]:
-    """从文本中按出现顺序提取脚注引用符号。"""
-    return FOOTNOTE_REF_PATTERN.findall(text)
+    """从文本中按出现顺序提取脚注引用符号。支持 Unicode 圆圈数字和 LaTeX 上标格式。"""
+    refs = FOOTNOTE_REF_PATTERN.findall(text)
+    # 同时匹配 $^{N}$ 格式的 LaTeX 上标脚注
+    latex_refs = LATEX_FOOTNOTE_REF_PATTERN.findall(text)
+    refs.extend(latex_refs)
+    return refs
 
 
 def _format_footnote(text: str) -> str:
-    """格式化脚注输出。"""
+    """格式化脚注输出。保留 $^{N}$ 前缀，去除纯数字前缀。"""
+    # 去除纯数字前缀（如 "1 Note content" -> "Note content"）
     m = re.match(r"^(\d+)\s*(.*)$", text.strip())
-    return f"- {m.group(2)}" if m else f"- {text}"
+    if m:
+        text = m.group(2)
+    return f"- {text.strip()}"
 
 
 def _merge_paragraphs(
@@ -235,7 +257,13 @@ def _generate_markdown_output(
                 if idx < len(fns) and fns[idx]:
                     fn_lines.append(f"> {fns[idx]}")
             if fn_lines:
-                all_parts.append("\n".join(fn_lines))
+                # 根据脚注内容检测语言，使用对应的注释标签
+                fn_text = " ".join(fn_lines)
+                lang = _detect_language(fn_text)
+                if lang == "zh":
+                    all_parts.append("<!-- 脚注 -->\n\n" + "\n".join(fn_lines) + "\n\n<!-- 脚注结束 -->")
+                else:
+                    all_parts.append("<!-- footnote -->\n\n" + "\n".join(fn_lines) + "\n\n<!-- footnote end -->")
 
         # 输出页脚：仅对已完成的页输出页脚
         next_page = merged_blocks[i + 1].page_idx if i + 1 < len(merged_blocks) else page_idx + 1
@@ -258,8 +286,13 @@ def _generate_markdown_output(
             for p in sorted(pages_footnotes.keys()):
                 notes = [n for n in pages_footnotes[p] if n]
                 if notes:
-                    trailing_notes.append("<!-- 脚注 -->")
-                    trailing_notes.extend(notes)
+                    # 根据脚注内容检测语言
+                    fn_text = " ".join(notes)
+                    lang = _detect_language(fn_text)
+                    if lang == "zh":
+                        trailing_notes.append("<!-- 脚注 -->\n\n" + "\n".join(notes) + "\n\n<!-- 脚注结束 -->")
+                    else:
+                        trailing_notes.append("<!-- footnote -->\n\n" + "\n".join(notes) + "\n\n<!-- footnote end -->")
             if trailing_notes:
                 all_parts.extend(trailing_notes)
 
