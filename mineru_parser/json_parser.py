@@ -81,7 +81,12 @@ def _extract_text_from_content_list_item(item: dict) -> str:
         img_path = item.get("img_path", "")
         captions = item.get("image_caption", [])
         cap_text = " ".join(captions).strip() if captions else ""
-        return f"![{cap_text}]({img_path})" if img_path else cap_text or ""
+        md = f"![{cap_text}]({img_path})" if img_path else cap_text or ""
+        # MinerU 对部分图表（如 flowchart）会生成 mermaid 代码，保留在 content 字段
+        mermaid = (item.get("content") or "").strip()
+        if mermaid:
+            md = f"{md}\n\n{mermaid}"
+        return md
     if t == "equation":
         return item.get("latex", item.get("text", ""))
     return ""

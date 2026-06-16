@@ -262,7 +262,7 @@ def merge_markdown_parts(
 
         # 替换 Markdown 中的引用
         def replacer(m: re.Match[str]) -> str:
-            cap, path = m.group(1), m.group(2)
+            path = m.group(2)
             mm = img_path_re.search(path)
             if mm:
                 old_name = mm.group(1)

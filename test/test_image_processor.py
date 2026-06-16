@@ -68,3 +68,28 @@ def test_process_images_rename_and_convert() -> None:
         assert "> Caption" in result
         assert (out_dir / "images" / "image_01.png").exists()
         assert not (out_dir / "images" / "test.jpg").exists()
+
+
+def test_process_images_preserves_mermaid_block() -> None:
+    """图片后处理应保留 mermaid 代码块。"""
+    with tempfile.TemporaryDirectory() as d:
+        temp_dir = Path(d) / "temp"
+        out_dir = Path(d) / "out"
+        temp_dir.mkdir()
+        out_dir.mkdir()
+        img_path = temp_dir / "test.jpg"
+        Image.new("RGB", (10, 10), color="red").save(img_path, "JPEG")
+
+        md = """![Caption](test.jpg)
+
+```mermaid
+graph TD
+  A --> B
+```"""
+        result = process_images(md, temp_dir, out_dir)
+
+        assert "![image_01](images/image_01.png)" in result
+        assert "```mermaid" in result
+        assert "graph TD" in result
+        assert "<details>" not in result
+        assert "</details>" not in result

@@ -46,7 +46,7 @@ class TestMainCallback:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "mineru-parse" in result.output
-        assert "1.2.0" in result.output
+        assert "1.3.0" in result.output
 
     def test_help_shows_commands(self) -> None:
         """验证 --help 显示所有命令。"""
@@ -88,6 +88,8 @@ class TestParseCommand:
         assert "--token" in result.output
         assert "--model" in result.output
         assert "--pages" in result.output
+        assert "--force" in result.output
+        assert "-f" in result.output
 
     @patch("mineru_parser.cli.load_config")
     def test_parse_missing_file_exits_error(self, mock_load_config) -> None:
@@ -162,6 +164,44 @@ class TestParseCommand:
         # 验证 pages_spec 被传递
         call_kwargs = mock_parse.call_args.kwargs
         assert call_kwargs.get("pages_spec") == "10-20,30-40"
+
+    @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
+    @patch("mineru_parser.cli.load_config")
+    def test_parse_existing_output_warns_without_force(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+        """验证输出目录已存在且未使用 -f 时发出警告。"""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"fake pdf content")
+        existing_dir = tmp_path / "test_parsed"
+        existing_dir.mkdir()
+
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
+        mock_load_config.return_value = mock_config
+        mock_parse.return_value = "# Parsed Content"
+
+        result = runner.invoke(app, ["parse", str(pdf_file), "-o", str(existing_dir)])
+
+        assert result.exit_code == 0
+        assert "输出目录已存在" in result.output
+        mock_parse.assert_called_once()
+
+    @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
+    @patch("mineru_parser.cli.load_config")
+    def test_parse_force_silences_existing_output_warning(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+        """验证 -f/--force 可抑制输出目录已存在警告。"""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"fake pdf content")
+        existing_dir = tmp_path / "test_parsed"
+        existing_dir.mkdir()
+
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
+        mock_load_config.return_value = mock_config
+        mock_parse.return_value = "# Parsed Content"
+
+        result = runner.invoke(app, ["parse", str(pdf_file), "-o", str(existing_dir), "-f"])
+
+        assert result.exit_code == 0
+        assert "输出目录已存在" not in result.output
+        mock_parse.assert_called_once()
 
 
 class TestFromJsonCommand:
@@ -296,7 +336,7 @@ class TestBatchCommand:
         # All succeed to avoid StopIteration issues with side_effect
         mock_parse.return_value = "# Parsed"
 
-        result = runner.invoke(app, ["batch", "-i", str(input_dir)])
+        runner.invoke(app, ["batch", "-i", str(input_dir)])
 
         # Verify that parse was called for all PDFs
         assert mock_parse.call_count >= 3

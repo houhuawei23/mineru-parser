@@ -33,6 +33,33 @@ def test_extract_text_from_content_list_item() -> None:
     assert _extract_text_from_content_list_item({"type": "list", "list_items": ["a", "b"]}) == "- a\n- b"
 
 
+def test_extract_text_from_image_with_mermaid() -> None:
+    """测试图片包含 mermaid 内容时直接输出 mermaid 代码块。"""
+    item = {
+        "type": "image",
+        "img_path": "images/abc.jpg",
+        "image_caption": ["Figure 1"],
+        "content": "```mermaid\ngraph TD\n  A --> B\n```",
+    }
+    md = _extract_text_from_content_list_item(item)
+    assert "![Figure 1](images/abc.jpg)" in md
+    assert "```mermaid" in md
+    assert "graph TD" in md
+    assert "<details>" not in md
+    assert "</details>" not in md
+
+
+def test_extract_text_from_image_without_mermaid() -> None:
+    """测试普通图片不包含 mermaid 时保持原格式。"""
+    item = {
+        "type": "image",
+        "img_path": "images/abc.jpg",
+        "image_caption": ["Figure 1"],
+    }
+    md = _extract_text_from_content_list_item(item)
+    assert md == "![Figure 1](images/abc.jpg)"
+
+
 def test_content_list_json_to_markdown_empty() -> None:
     """空列表应返回空字符串。"""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:

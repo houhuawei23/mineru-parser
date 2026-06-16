@@ -167,6 +167,12 @@ def parse_cmd(
         path_type=Path,
         help="覆盖配置（YAML）；优先级高于主命令 -c、环境变量与当前目录 config.yml",
     ),
+    force: bool = typer.Option(
+        False,
+        "-f",
+        "--force",
+        help="强制覆盖已存在的输出目录",
+    ),
 ) -> None:
     """解析单个 PDF 或 URL。"""
     _apply_subcommand_config(ctx, config_path)
@@ -203,7 +209,8 @@ def parse_cmd(
         if output and output.suffix == ".md":
             output_dir = output.parent / f"{p.stem}{cfg.output_parsed_suffix}"
 
-    if output_dir.exists() and not ctx.obj["force"]:
+    force_overwrite = force or ctx.obj.get("force", False)
+    if output_dir.exists() and not force_overwrite:
         logger.warning(f"输出目录已存在: {output_dir}，使用 -f 强制覆盖")
 
     base_md = _get_md_options(ctx)

@@ -16,8 +16,10 @@
 - **API 速率限制**：内置并发控制，防止触发 API 限流
 - **断点续传**：批量任务支持 `--resume` 从中断处继续
 - **模拟运行**：`--dry-run` 预览待处理内容，不消耗 API 额度
+- **强制覆盖**：`parse` 命令支持 `-f/--force` 覆盖已有输出目录
 - 图片后处理（仅保留被引用图片，统一重命名为 `image_xx.png`）
 - 支持从 `content_list.json` / `content_list_v2.json` 重新生成 Markdown
+- 对 MinerU 识别的 flowchart 图片自动保留 mermaid 代码块
 
 ## 项目结构
 
@@ -164,6 +166,7 @@ mineru-parse from-json --help
 | `--no-footnote` | 关闭脚注 |
 | `--pages` | 仅解析指定页（如 `10-20,30-40`） |
 | `--target-chunk-pages` | 自适应分片目标页数（0=仅超限切分，>0=始终切分到此大小） |
+| `-f, --force` | 强制覆盖已存在的输出目录 |
 
 ### batch 命令参数
 
@@ -288,6 +291,17 @@ pytest --cov=mineru_parser --cov-report=html
 
 ## 版本历史
 
+### v1.3.0 (2026-06-16)
+
+- **新增**：`mineru-parse parse` 命令支持 `-f/--force`，强制覆盖已存在的输出目录
+- **新增**：对 MinerU 识别的 flowchart 图片，在最终 Markdown 中自动保留 ````mermaid` 代码块
+- **修复**：脚注位置与格式问题
+  - 扩展脚注引用识别，支持 `$^{N}$` LaTeX 上标格式
+  - 脚注按内容语言使用 `<!-- 脚注 -->`（中文）或 `<!-- footnote -->`（英文）包裹
+- **文档**：更新 README 功能列表与参数说明
+- **署名**：本版本由 kimi-code（kimi-k2.7）共同开发
+- 测试：90 个测试全部通过，覆盖率 54%
+
 ### v1.2.1 (2026-05-29)
 
 - **修复**：PDF 解析时 `code` 类型块的标题（`code_caption`）丢失问题
@@ -330,6 +344,12 @@ pytest --cov=mineru_parser --cov-report=html
 ## 贡献
 
 欢迎提交 Issue / PR，具体见 `CONTRIBUTING.md`。
+
+### Contributors
+
+- [mineru-parser contributors](https://github.com/houhuawei23/mineru-parser)
+- kimi-code（Kimi AI Agent）
+- kimi-k2.7（Kimi 大语言模型）
 
 ## License
 
