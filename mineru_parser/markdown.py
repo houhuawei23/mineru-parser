@@ -13,6 +13,7 @@ from mineru_parser.json_parser import (
     content_list_json_to_markdown,
     content_list_v2_to_markdown,
     find_content_list_json,
+    sanitize_text,
 )
 
 
@@ -72,6 +73,7 @@ def regenerate_markdown_from_json(
         return None
 
     markdown = remove_line_number_blocks(markdown)
+    markdown = sanitize_text(markdown)
     out_path = output_md or (parsed_dir / "full.md")
     out_path.write_text(markdown, encoding="utf-8")
     logger.info(f"已生成 Markdown: {out_path}")
@@ -199,6 +201,9 @@ def build_markdown_from_zip(
 
         # 移除论文页边行号块
         markdown = remove_line_number_blocks(markdown)
+
+        # 兜底清理：移除所有来源可能混入的控制字符
+        markdown = sanitize_text(markdown)
 
         md_path = output_dir / output_md_name
         md_path.write_text(markdown, encoding="utf-8")

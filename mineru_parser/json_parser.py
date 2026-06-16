@@ -16,6 +16,31 @@ LATEX_FOOTNOTE_REF_PATTERN = re.compile(r"\$\^\{(\d+)\}\$")
 # 句末标点：用于判断段落是否可在跨页时合并
 # 包含中英文句号、问号、感叹号、引号、分号、冒号以及 proof end 符号 □
 SENTENCE_END_CHARS = "。！？；：」\".?!□"
+# 需要保留的空白字符
+_ALLOWED_WHITESPACE = {"\t", "\n", "\r"}
+# 零宽字符
+_ZERO_WIDTH_CHARS = "\u200B\u200C\u200D\uFEFF\u2060"
+
+
+def sanitize_text(text: str) -> str:
+    """
+    清理文本中的非法控制字符、C1 控制字符与零宽字符。
+
+    保留普通空白（\t、\n、\r）与可见字符，将 \r\n 与单独 \r 统一为 \n。
+    用于消除 MinerU OCR/图表识别偶尔混入的乱码控制字符。
+    """
+    if not isinstance(text, str):
+        return ""
+    # 保留可见字符与允许的空白，移除 C0 控制字符
+    cleaned = "".join(
+        c for c in text if ord(c) >= 32 or c in _ALLOWED_WHITESPACE
+    )
+    # 移除 DEL (U+007F) 与 C1 控制字符 (U+0080-U+009F)
+    cleaned = "".join(c for c in cleaned if not 0x7F <= ord(c) <= 0x9F)
+    # 移除零宽字符
+    cleaned = "".join(c for c in cleaned if c not in _ZERO_WIDTH_CHARS)
+    # 统一换行
+    return cleaned.replace("\r\n", "\n").replace("\r", "\n")
 
 
 @dataclass
@@ -58,38 +83,38 @@ def find_content_list_json(extract_dir: Path) -> Path | None:
 
 
 def _extract_text_from_content_list_item(item: dict) -> str:
-    """从 content_list 单项中提取文本内容。"""
+    """从 content_list 单项中提取并清理文本内容。"""
     t = item.get("type", "")
     if t in ("text", "header", "footer", "page_number", "page_footnote", "aside_text", "title", "ref_text"):
-        return (item.get("text") or "").strip()
+        return sanitize_text((item.get("text") or "").strip())
     if t == "list":
         items = item.get("list_items", [])
-        return "\n".join(f"- {s.strip()}" for s in items if s)
+        return "\n".join(sanitize_text(f"- {s.strip()}") for s in items if s)
     if t == "table":
-        body = item.get("table_body", "")
+        body = sanitize_text(item.get("table_body", ""))
         caption = item.get("table_caption", [])
-        cap_text = " ".join(caption).strip() if caption else ""
+        cap_text = sanitize_text(" ".join(caption).strip()) if caption else ""
         return f"**{cap_text}**\n\n{body}" if cap_text else body
     if t == "code":
-        body = item.get("code_body", "")
+        body = sanitize_text(item.get("code_body", ""))
         caption = item.get("code_caption", [])
-        cap_text = " ".join(caption).strip() if caption else ""
+        cap_text = sanitize_text(" ".join(caption).strip()) if caption else ""
         # code_body 通常已包含 ```language\n...\n```，直接返回
         if cap_text:
             return f"{cap_text}\n\n{body}"
         return body
     if t == "image":
-        img_path = item.get("img_path", "")
+        img_path = sanitize_text(item.get("img_path", ""))
         captions = item.get("image_caption", [])
-        cap_text = " ".join(captions).strip() if captions else ""
+        cap_text = sanitize_text(" ".join(captions).strip()) if captions else ""
         md = f"![{cap_text}]({img_path})" if img_path else cap_text or ""
         # MinerU 对部分图表（如 flowchart）会生成 mermaid 代码，保留在 content 字段
-        mermaid = (item.get("content") or "").strip()
+        mermaid = sanitize_text((item.get("content") or "").strip())
         if mermaid:
             md = f"{md}\n\n{mermaid}"
         return md
     if t == "equation":
-        return item.get("latex", item.get("text", ""))
+        return sanitize_text(item.get("latex", item.get("text", "")))
     return ""
 
 
@@ -399,7 +424,7 @@ def content_list_json_to_markdown(
 
 
 def _get_text_from_content_v2(content: dict) -> str:
-    """从 content_list_v2 的 content 中提取文本。"""
+    """从 content_list_v2 的 content 中提取并清理文本。"""
     if not content:
         return ""
     parts: list[str] = []
@@ -409,11 +434,11 @@ def _get_text_from_content_v2(content: dict) -> str:
                 if isinstance(c, dict):
                     ct = c.get("type", "")
                     if ct == "text":
-                        parts.append(c.get("content", ""))
+                        parts.append(sanitize_text(c.get("content", "")))
                     elif ct == "equation_inline":
-                        parts.append(f"${c.get('content', '')}$")
+                        parts.append(f"${sanitize_text(c.get('content', ''))}$")
                     else:
-                        parts.append(c.get("content", ""))
+                        parts.append(sanitize_text(c.get("content", "")))
     return " ".join(parts).strip()
 
 
@@ -428,9 +453,9 @@ def _get_code_caption_from_content_v2(content: dict) -> str:
                 if isinstance(c, dict):
                     ct = c.get("type", "")
                     if ct == "text":
-                        parts.append(c.get("content", ""))
+                        parts.append(sanitize_text(c.get("content", "")))
                     else:
-                        parts.append(c.get("content", ""))
+                        parts.append(sanitize_text(c.get("content", "")))
     return " ".join(parts).strip()
 
 
@@ -445,9 +470,9 @@ def _get_code_content_from_content_v2(content: dict) -> str:
                 if isinstance(c, dict):
                     ct = c.get("type", "")
                     if ct == "text":
-                        parts.append(c.get("content", ""))
+                        parts.append(sanitize_text(c.get("content", "")))
                     else:
-                        parts.append(c.get("content", ""))
+                        parts.append(sanitize_text(c.get("content", "")))
     return "\n".join(parts)
 
 

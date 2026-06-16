@@ -10,6 +10,7 @@ from mineru_parser.json_parser import (
     content_list_json_to_markdown,
     _extract_text_from_content_list_item,
     _merge_paragraphs,
+    sanitize_text,
     ContentBlock,
 )
 
@@ -157,5 +158,51 @@ def test_content_list_json_to_markdown_paragraph_spacing() -> None:
             assert "Paragraph one ends here.\n\nParagraph two starts here." in md
             # 不应出现粘连
             assert "here.Paragraph" not in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_sanitize_text_removes_control_chars() -> None:
+    """sanitize_text 应移除 C0/C1 控制字符与零宽字符。"""
+    raw = "hello\x00\x11world\x7f\x85\u200b"
+    cleaned = sanitize_text(raw)
+    assert cleaned == "helloworld"
+    assert "\x00" not in cleaned
+    assert "\x11" not in cleaned
+    assert "\u200b" not in cleaned
+
+
+def test_sanitize_text_keeps_whitespace_and_markdown() -> None:
+    """sanitize_text 应保留换行、制表符与 Markdown 语法字符。"""
+    raw = "# Title\n\n**bold** and $x = 1$\n\n- item 1\n- item 2"
+    assert sanitize_text(raw) == raw
+
+
+def test_extract_text_from_content_list_item_sanitizes_text() -> None:
+    """从 content_list 项提取文本时应自动清理控制字符。"""
+    item = {"type": "text", "text": "Paragraph with \x11\x04garbage\x00."}
+    result = _extract_text_from_content_list_item(item)
+    assert result == "Paragraph with garbage."
+
+
+def test_content_list_json_to_markdown_sanitizes_control_chars() -> None:
+    """生成的 Markdown 中不应包含控制字符。"""
+    data = [
+        {
+            "type": "text",
+            "text": "an edge between X and $Z$ that $G _ { 1 } { ' }$ -\x11\x04\x08\x10-\x0e\x04\x06 graph from",
+            "page_idx": 0,
+        },
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "\x11" not in md
+            assert "\x04" not in md
+            assert "\x0e" not in md
+            assert "an edge between X" in md
+            assert "graph from" in md
         finally:
             Path(f.name).unlink()
