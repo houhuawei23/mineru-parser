@@ -20,6 +20,38 @@ SENTENCE_END_CHARS = "。！？；：」\".?!□"
 _ALLOWED_WHITESPACE = {"\t", "\n", "\r"}
 # 零宽字符
 _ZERO_WIDTH_CHARS = "\u200B\u200C\u200D\uFEFF\u2060"
+# 编号/字母列表项前缀：如 (1)、1.、(a)、A. 等（必须带分隔符）
+_NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*[\(\[]?(\d+|[a-zA-Z])[\)\]\:\.]\s*")
+# VLM/OCR 自我修正伪文本特征
+_VLM_PSEUDO_TEXT_RE = re.compile(
+    r"The image contains|According to Rule|must be ignored|\[Empty String\]|"
+    r"vertical lines are stylistic|background elements? and must be ignored|"
+    r"corrected OCR text|stylish or background element|"
+    r"ignored by the OCR result",
+    re.IGNORECASE,
+)
+
+
+def _is_vlm_pseudo_text(text: str) -> bool:
+    """判断是否为 VLM/OCR 自我修正说明噪声。"""
+    return bool(text and _VLM_PSEUDO_TEXT_RE.search(text))
+
+
+def _list_items_to_markdown(items: list[str], sub_type: str = "") -> str:
+    """
+    将列表项转为 Markdown。
+
+    MinerU 原始 full.md 对普通文本列表（如定理条件、算法步骤、参考文献）通常按普通段落输出，
+    行尾用两个空格实现硬换行；只有明确以 Markdown 列表标记开头的项才保留为无序列表。
+    """
+    cleaned = [sanitize_text(s.rstrip()) for s in items if s and s.strip()]
+    if not cleaned:
+        return ""
+    # 若所有项已以 Markdown 列表标记开头，则保留为无序列表
+    if all(s.lstrip().startswith(("- ", "* ", "+ ", "• ")) for s in cleaned):
+        return "\n".join(cleaned)
+    # 其余情况按普通段落输出，行尾用两个空格实现硬换行
+    return "  \n".join(cleaned)
 
 
 def sanitize_text(text: str) -> str:
@@ -86,10 +118,11 @@ def _extract_text_from_content_list_item(item: dict) -> str:
     """从 content_list 单项中提取并清理文本内容。"""
     t = item.get("type", "")
     if t in ("text", "header", "footer", "page_number", "page_footnote", "aside_text", "title", "ref_text"):
-        return sanitize_text((item.get("text") or "").strip())
+        text = sanitize_text((item.get("text") or "").strip())
+        return "" if _is_vlm_pseudo_text(text) else text
     if t == "list":
         items = item.get("list_items", [])
-        return "\n".join(sanitize_text(f"- {s.strip()}") for s in items if s)
+        return _list_items_to_markdown(items, sub_type=item.get("sub_type", ""))
     if t == "table":
         body = sanitize_text(item.get("table_body", ""))
         caption = item.get("table_caption", [])
@@ -104,18 +137,27 @@ def _extract_text_from_content_list_item(item: dict) -> str:
             return f"{cap_text}\n\n{body}"
         return body
     if t == "image":
-        img_path = sanitize_text(item.get("img_path", ""))
-        captions = item.get("image_caption", [])
-        cap_text = sanitize_text(" ".join(captions).strip()) if captions else ""
-        md = f"![{cap_text}]({img_path})" if img_path else cap_text or ""
-        # MinerU 对部分图表（如 flowchart）会生成 mermaid 代码，保留在 content 字段
-        mermaid = sanitize_text((item.get("content") or "").strip())
-        if mermaid:
-            md = f"{md}\n\n{mermaid}"
-        return md
+        # 返回图片路径即可，完整 Markdown 在 _item_to_content_md 中组装
+        return sanitize_text(item.get("img_path", ""))
     if t == "equation":
         return sanitize_text(item.get("latex", item.get("text", "")))
     return ""
+
+
+def _build_image_markdown(item: dict) -> str:
+    """为 image 类型构建 Markdown：图片 + mermaid + caption（多行 caption 用硬换行连接）。"""
+    img_path = sanitize_text(item.get("img_path", ""))
+    captions = item.get("image_caption", [])
+    cap_lines = [sanitize_text(c.strip()) for c in captions if c.strip()]
+    mermaid = sanitize_text((item.get("content") or "").strip())
+    parts: list[str] = []
+    if img_path:
+        parts.append(f"![]({img_path})")
+    if mermaid:
+        parts.append(mermaid)
+    if cap_lines:
+        parts.append("  \n".join(cap_lines))
+    return "\n\n".join(parts)
 
 
 def _item_to_content_md(item: dict, text: str) -> str:
@@ -129,9 +171,14 @@ def _item_to_content_md(item: dict, text: str) -> str:
     if t == "title":
         level = item.get("text_level", 1)
         return f"{'#' * min(level, 6)} {text}"
-    if t in ("list", "table", "code", "image"):
+    if t == "image":
+        return _build_image_markdown(item)
+    if t in ("list", "table", "code"):
         return text
     if t == "equation":
+        text = text.strip()
+        if text.startswith("$$") and text.endswith("$$"):
+            return text
         return f"$${text}$$"
     if t == "aside_text":
         return f"*{text}*"
@@ -190,12 +237,16 @@ def _extract_footnote_refs(text: str) -> list[str]:
 
 
 def _format_footnote(text: str) -> str:
-    """格式化脚注输出。保留 $^{N}$ 前缀，去除纯数字前缀。"""
+    """格式化脚注输出。保留 $^{N}$ 前缀，去除纯数字前缀，多行脚注每项都加 - 前缀。"""
     # 去除纯数字前缀（如 "1 Note content" -> "Note content"）
-    m = re.match(r"^(\d+)\s*(.*)$", text.strip())
-    if m:
-        text = m.group(2)
-    return f"- {text.strip()}"
+    lines = [ln.strip() for ln in text.strip().split("\n") if ln.strip()]
+    result_lines: list[str] = []
+    for line in lines:
+        m = re.match(r"^(\d+)\s*(.*)$", line)
+        if m:
+            line = m.group(2)
+        result_lines.append(f"- {line.strip()}")
+    return "\n".join(result_lines)
 
 
 def _merge_paragraphs(
@@ -262,7 +313,7 @@ def _generate_markdown_output(
     include_footer: bool = False,
     include_page_number: bool = False,
     include_footnote: bool = True,
-    inline_footnotes: bool = True,
+    inline_footnotes: bool = False,
 ) -> str:
     """从合并后的内容块生成最终 Markdown。"""
     all_parts: list[str] = []
@@ -341,7 +392,7 @@ def content_list_json_to_markdown(
     include_page_number: bool = False,
     include_footnote: bool = True,
     merge_paragraphs: bool = True,
-    inline_footnotes: bool = True,
+    inline_footnotes: bool = False,
 ) -> str:
     """
     从 MinerU content_list JSON 生成完整 Markdown。
@@ -423,6 +474,32 @@ def content_list_json_to_markdown(
     )
 
 
+def _build_image_markdown_v2(item: dict) -> str:
+    """为 content_list_v2 的 image 类型构建 Markdown。"""
+    content = item.get("content", {}) if isinstance(item, dict) else {}
+    if not isinstance(content, dict):
+        content = {}
+    img_source = content.get("image_source", {})
+    img_path = sanitize_text(img_source.get("path", "")) if isinstance(img_source, dict) else ""
+    mermaid = sanitize_text((content.get("content") or "").strip())
+    cap_lines: list[str] = []
+    for cap in content.get("image_caption", []):
+        if isinstance(cap, dict):
+            line = sanitize_text(cap.get("content", "").strip())
+        else:
+            line = sanitize_text(str(cap).strip())
+        if line:
+            cap_lines.append(line)
+    parts: list[str] = []
+    if img_path:
+        parts.append(f"![]({img_path})")
+    if mermaid:
+        parts.append(mermaid)
+    if cap_lines:
+        parts.append("  \n".join(cap_lines))
+    return "\n\n".join(parts)
+
+
 def _get_text_from_content_v2(content: dict) -> str:
     """从 content_list_v2 的 content 中提取并清理文本。"""
     if not content:
@@ -434,11 +511,15 @@ def _get_text_from_content_v2(content: dict) -> str:
                 if isinstance(c, dict):
                     ct = c.get("type", "")
                     if ct == "text":
-                        parts.append(sanitize_text(c.get("content", "")))
+                        text = sanitize_text(c.get("content", ""))
+                        if not _is_vlm_pseudo_text(text):
+                            parts.append(text)
                     elif ct == "equation_inline":
                         parts.append(f"${sanitize_text(c.get('content', ''))}$")
                     else:
-                        parts.append(sanitize_text(c.get("content", "")))
+                        text = sanitize_text(c.get("content", ""))
+                        if not _is_vlm_pseudo_text(text):
+                            parts.append(text)
     return " ".join(parts).strip()
 
 
@@ -516,13 +597,19 @@ def _convert_v2_to_content_blocks(
             elif t == "paragraph":
                 page_blocks.append((text, item, True))
             elif t == "list":
+                list_type = content.get("list_type", "") if isinstance(content, dict) else ""
+                item_texts: list[str] = []
                 for li in content.get("list_items", []):
                     ic = li.get("item_content", []) if isinstance(li, dict) else []
                     line = " ".join(
                         c.get("content", "") if isinstance(c, dict) else "" for c in ic
                     ).strip()
                     if line:
-                        page_blocks.append((f"- {line}", item, False))
+                        item_texts.append(line)
+                if item_texts:
+                    md = _list_items_to_markdown(item_texts, sub_type=list_type)
+                    if md:
+                        page_blocks.append((md, item, False))
             elif t == "code":
                 caption = _get_code_caption_from_content_v2(content)
                 code_body = _get_code_content_from_content_v2(content)
@@ -534,6 +621,18 @@ def _convert_v2_to_content_blocks(
                     md_parts.append(f"```{lang}\n{code_body}\n```")
                 if md_parts:
                     page_blocks.append(("\n\n".join(md_parts), item, False))
+            elif t == "equation_interline":
+                math = content.get("math_content", "") if isinstance(content, dict) else ""
+                math = sanitize_text(math).strip()
+                if math:
+                    if math.startswith("$$") and math.endswith("$$"):
+                        page_blocks.append((math, item, False))
+                    else:
+                        page_blocks.append((f"$${math}$$", item, False))
+            elif t == "image":
+                img_md = _build_image_markdown_v2(item)
+                if img_md:
+                    page_blocks.append((img_md, item, False))
             elif t == "table" or text:
                 page_blocks.append((text, item, False))
 
@@ -566,7 +665,7 @@ def content_list_v2_to_markdown(
     include_page_number: bool = False,
     include_footnote: bool = True,
     merge_paragraphs: bool = True,
-    inline_footnotes: bool = True,
+    inline_footnotes: bool = False,
 ) -> str:
     """从 MinerU content_list_v2.json 生成完整 Markdown，支持跨页合并与脚注内联。"""
     with open(json_path, encoding="utf-8") as f:

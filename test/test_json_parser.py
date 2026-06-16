@@ -8,7 +8,10 @@ from pathlib import Path
 from mineru_parser.json_parser import (
     find_content_list_json,
     content_list_json_to_markdown,
+    content_list_v2_to_markdown,
     _extract_text_from_content_list_item,
+    _item_to_content_md,
+    _list_items_to_markdown,
     _merge_paragraphs,
     sanitize_text,
     ContentBlock,
@@ -33,34 +36,64 @@ def test_extract_text_from_content_list_item() -> None:
     """测试文本提取。"""
     assert _extract_text_from_content_list_item({"type": "text", "text": " hello "}) == "hello"
     assert _extract_text_from_content_list_item({"type": "header", "text": "Header"}) == "Header"
-    assert _extract_text_from_content_list_item({"type": "list", "list_items": ["a", "b"]}) == "- a\n- b"
+    # image 类型仅返回图片路径，完整 Markdown 由 _item_to_content_md 组装
+    assert _extract_text_from_content_list_item(
+        {"type": "image", "img_path": "images/abc.jpg", "image_caption": ["Figure 1"]}
+    ) == "images/abc.jpg"
 
 
-def test_extract_text_from_image_with_mermaid() -> None:
-    """测试图片包含 mermaid 内容时直接输出 mermaid 代码块。"""
+def test_list_items_to_markdown_bullet() -> None:
+    """已带 Markdown 列表标记的项应保留为无序列表。"""
+    md = _list_items_to_markdown(["- apple", "- banana"])
+    assert md == "- apple\n- banana"
+
+
+def test_list_items_to_markdown_numbered() -> None:
+    """编号项应按普通段落输出，保留硬换行。"""
+    md = _list_items_to_markdown(["(1) first", "If sub-condition", "(2) second"])
+    assert md == "(1) first  \nIf sub-condition  \n(2) second"
+
+
+def test_list_items_to_markdown_plain_text() -> None:
+    """无列表标记的文本项应按普通段落输出。"""
+    md = _list_items_to_markdown(["apple", "banana"])
+    assert md == "apple  \nbanana"
+
+
+def test_list_items_to_markdown_references() -> None:
+    """参考文献应按普通段落输出。"""
+    md = _list_items_to_markdown(
+        ["[A] ref one", "[B] ref two"], sub_type="ref_text"
+    )
+    assert md == "[A] ref one  \n[B] ref two"
+
+
+def test_item_to_content_md_image_with_mermaid() -> None:
+    """测试图片包含 mermaid 内容时直接输出 mermaid 代码块，caption 作为正文。"""
     item = {
         "type": "image",
         "img_path": "images/abc.jpg",
         "image_caption": ["Figure 1"],
         "content": "```mermaid\ngraph TD\n  A --> B\n```",
     }
-    md = _extract_text_from_content_list_item(item)
-    assert "![Figure 1](images/abc.jpg)" in md
+    md = _item_to_content_md(item, _extract_text_from_content_list_item(item))
+    assert "![](images/abc.jpg)" in md
+    assert "Figure 1" in md
     assert "```mermaid" in md
     assert "graph TD" in md
     assert "<details>" not in md
     assert "</details>" not in md
 
 
-def test_extract_text_from_image_without_mermaid() -> None:
-    """测试普通图片不包含 mermaid 时保持原格式。"""
+def test_item_to_content_md_image_without_mermaid() -> None:
+    """测试普通图片 caption 作为正文段落。"""
     item = {
         "type": "image",
         "img_path": "images/abc.jpg",
         "image_caption": ["Figure 1"],
     }
-    md = _extract_text_from_content_list_item(item)
-    assert md == "![Figure 1](images/abc.jpg)"
+    md = _item_to_content_md(item, _extract_text_from_content_list_item(item))
+    assert md == "![](images/abc.jpg)\n\nFigure 1"
 
 
 def test_content_list_json_to_markdown_empty() -> None:
@@ -204,5 +237,180 @@ def test_content_list_json_to_markdown_sanitizes_control_chars() -> None:
             assert "\x0e" not in md
             assert "an edge between X" in md
             assert "graph from" in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_equation_not_double_wrapped() -> None:
+    """行间公式已带 $$ 时不应重复包裹。"""
+    data = [
+        {
+            "type": "equation",
+            "text": "$$\nx = 1\n$$",
+            "page_idx": 0,
+        },
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "$$\nx = 1\n$$" in md
+            assert "$$$$" not in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_vlm_pseudo_text_filtered() -> None:
+    """VLM/OCR 自我修正说明应被过滤。"""
+    data = [
+        {
+            "type": "text",
+            "text": "The image contains a single line. According to Rule 2, [Empty String]",
+            "page_idx": 0,
+        },
+        {"type": "text", "text": "Real paragraph text.", "page_idx": 0},
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "The image contains" not in md
+            assert "[Empty String]" not in md
+            assert "Real paragraph text." in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_image_caption_as_body_paragraph() -> None:
+    """图片 caption 应作为正文段落，而非 alt text。"""
+    data = [
+        {
+            "type": "image",
+            "img_path": "images/fig.jpg",
+            "image_caption": ["Figure 1: caption"],
+            "page_idx": 0,
+        },
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "![](images/fig.jpg)" in md
+            assert "Figure 1: caption" in md
+            assert "![Figure 1: caption](images/fig.jpg)" not in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_plain_text_list_not_bulleted() -> None:
+    """普通文本列表不应被强制转为无序列表。"""
+    data = [
+        {
+            "type": "list",
+            "sub_type": "text",
+            "list_items": ["(1) first", "If condition", "(2) second"],
+            "page_idx": 0,
+        },
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "- (1) first" not in md
+            assert "(1) first" in md
+            assert "(2) second" in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_footnote_not_inline_by_default() -> None:
+    """默认情况下脚注应输出在文档末尾，而非引用段落后内联。"""
+    data = [
+        {"type": "text", "text": "Text with reference $^{1}$.", "page_idx": 0},
+        {"type": "text", "text": "Another paragraph.", "page_idx": 0},
+        {"type": "page_footnote", "text": "1 footnote content", "page_idx": 0},
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            # 引用段落后不应紧跟 footnote 块
+            assert "Text with reference $^{1}$.\n\n<!-- footnote -->" not in md
+            # footnote 应出现在文档末尾
+            assert md.strip().endswith("<!-- footnote end -->")
+            assert "footnote content" in md
+            # 另一个段落应位于引用段落和脚注之间
+            assert "Another paragraph." in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_multi_line_footnote_format() -> None:
+    """多行脚注每项都应带 - 前缀。"""
+    data = [
+        {"type": "page_footnote", "text": "*First line.\n†Second line.", "page_idx": 0},
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "- *First line." in md
+            assert "- †Second line." in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_content_list_v2_equation_interline() -> None:
+    """content_list_v2 应正确输出行间公式。"""
+    data = [
+        [
+            {
+                "type": "equation_interline",
+                "content": {
+                    "math_content": "x = 1",
+                    "math_type": "latex",
+                },
+            }
+        ]
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_v2_to_markdown(Path(f.name))
+            assert "$$x = 1$$" in md
+            assert "$$$$" not in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_content_list_v2_image_caption() -> None:
+    """content_list_v2 图片 caption 应作为正文段落。"""
+    data = [
+        [
+            {
+                "type": "image",
+                "content": {
+                    "image_source": {"path": "images/fig.jpg"},
+                    "image_caption": [{"type": "text", "content": "Figure 1: caption"}],
+                    "content": "",
+                },
+            }
+        ]
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_v2_to_markdown(Path(f.name))
+            assert "![](images/fig.jpg)" in md
+            assert "Figure 1: caption" in md
+            assert "![Figure 1: caption](images/fig.jpg)" not in md
         finally:
             Path(f.name).unlink()

@@ -172,7 +172,7 @@ class MarkdownOptions:
         self.include_page_number = bool(md.get("include_page_number", False))
         self.include_footnote = bool(md.get("include_footnote", True))
         self.merge_paragraphs = bool(md.get("merge_paragraphs", True))
-        self.inline_footnotes = bool(md.get("inline_footnotes", True))
+        self.inline_footnotes = bool(md.get("inline_footnotes", False))
 
 
 class Config:

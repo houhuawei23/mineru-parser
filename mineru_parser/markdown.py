@@ -25,7 +25,7 @@ def regenerate_markdown_from_json(
     include_page_number: bool = False,
     include_footnote: bool = True,
     merge_paragraphs: bool = True,
-    inline_footnotes: bool = True,
+    inline_footnotes: bool = False,
 ) -> str | None:
     """
     从已解压的 MinerU 解析目录中的 JSON 重新生成完整 Markdown。
@@ -134,7 +134,7 @@ def build_markdown_from_zip(
     include_page_number: bool = False,
     include_footnote: bool = True,
     merge_paragraphs: bool = True,
-    inline_footnotes: bool = True,
+    inline_footnotes: bool = False,
     output_md_name: str = "full.md",
 ) -> str | None:
     """
