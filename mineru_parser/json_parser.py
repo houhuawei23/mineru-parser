@@ -14,7 +14,8 @@ FOOTNOTE_REF_PATTERN = re.compile(f"[{FOOTNOTE_REFS}]")
 # LaTeX 上标脚注引用格式：$^{1}$, $^{2}$ 等
 LATEX_FOOTNOTE_REF_PATTERN = re.compile(r"\$\^\{(\d+)\}\$")
 # 句末标点：用于判断段落是否可在跨页时合并
-SENTENCE_END_CHARS = "。！？；：」\""
+# 包含中英文句号、问号、感叹号、引号、分号、冒号以及 proof end 符号 □
+SENTENCE_END_CHARS = "。！？；：」\".?!□"
 
 
 @dataclass
@@ -205,6 +206,9 @@ def _merge_paragraphs(
             if next_block.page_idx > merged_page + 1:
                 break
             if not next_block.is_plain_paragraph:
+                break
+            # 仅合并跨页的段落，避免同一页中相邻段落被错误拼接
+            if next_block.page_idx <= merged_page:
                 break
             if _ends_with_sentence_end(merged_md):
                 break
