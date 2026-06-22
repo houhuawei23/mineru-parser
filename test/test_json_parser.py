@@ -14,6 +14,7 @@ from mineru_parser.json_parser import (
     _list_items_to_markdown,
     _merge_paragraphs,
     sanitize_text,
+    convert_html_tables_to_markdown,
     ContentBlock,
 )
 
@@ -412,5 +413,88 @@ def test_content_list_v2_image_caption() -> None:
             assert "![](images/fig.jpg)" in md
             assert "Figure 1: caption" in md
             assert "![Figure 1: caption](images/fig.jpg)" not in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_convert_html_tables_to_markdown_simple() -> None:
+    """简单 HTML 表格应转为 Markdown 表格，默认首行为表头。"""
+    html = (
+        "<table><tr><td>A</td><td>B</td></tr>"
+        "<tr><td>1</td><td>2</td></tr></table>"
+    )
+    md = convert_html_tables_to_markdown(html)
+    assert "<table>" not in md
+    assert "| A | B |" in md
+    assert "| --- | --- |" in md
+    assert "| 1 | 2 |" in md
+
+
+def test_convert_html_tables_to_markdown_with_th() -> None:
+    """包含 <th> 时，表头行应正确识别。"""
+    html = (
+        "<table><tr><th>Name</th><th>Value</th></tr>"
+        "<tr><td>foo</td><td>bar</td></tr></table>"
+    )
+    md = convert_html_tables_to_markdown(html)
+    assert "| Name | Value |" in md
+    assert "| foo | bar |" in md
+
+
+def test_convert_html_tables_to_markdown_escapes_pipe() -> None:
+    """单元格中的管道符应被转义。"""
+    html = "<table><tr><td>a | b</td><td>c</td></tr></table>"
+    md = convert_html_tables_to_markdown(html)
+    assert "a \\| b" in md
+
+
+def test_convert_html_tables_to_markdown_colspan() -> None:
+    """colspan 应被展开为多个相同内容的单元格。"""
+    html = (
+        "<table><tr><td>A</td><td>B</td></tr>"
+        "<tr><td colspan=\"2\">X</td></tr></table>"
+    )
+    md = convert_html_tables_to_markdown(html)
+    assert "| X | X |" in md
+
+
+def test_convert_html_tables_to_markdown_rowspan() -> None:
+    """rowspan 应被展开到后续行。"""
+    html = (
+        "<table><tr><td>A</td><td>B</td></tr>"
+        "<tr><td rowspan=\"2\">X</td><td>Y</td></tr>"
+        "<tr><td>Z</td></tr></table>"
+    )
+    md = convert_html_tables_to_markdown(html)
+    lines = [ln.strip() for ln in md.splitlines() if ln.strip()]
+    assert "| X | Y |" in lines
+    assert "| X | Z |" in lines
+
+
+def test_convert_html_tables_to_markdown_leaves_text_unchanged() -> None:
+    """无 HTML 表格时文本应保持不变。"""
+    text = "Some text with <b>tag</b> but no table."
+    assert convert_html_tables_to_markdown(text) == text
+
+
+def test_content_list_json_to_markdown_converts_html_table() -> None:
+    """content_list JSON 中的 table_body HTML 应被转换为 Markdown 表格。"""
+    data = [
+        {
+            "type": "table",
+            "page_idx": 0,
+            "table_body": "<table><tr><td>X</td><td>Y</td></tr><tr><td>1</td><td>2</td></tr></table>",
+            "table_caption": ["Table 1"],
+        }
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "<table>" not in md
+            assert "| X | Y |" in md
+            assert "| 1 | 2 |" in md
+            assert "**Table 1**" in md
         finally:
             Path(f.name).unlink()

@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+from loguru import logger
+
 # 确保可导入 mineru_parser
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -16,6 +18,21 @@ from mineru_parser.api import parse_pdf_via_api_with_auto_split
 from mineru_parser.config import ConfigError, load_config
 from mineru_parser.markdown import regenerate_markdown_from_json
 from mineru_parser.utils import resolve_input_to_pdf
+
+
+def _setup_logging(log_file: Path) -> None:
+    """配置日志：文件记录详细日志，终端仅显示警告及以上。"""
+    logger.remove()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.add(
+        str(log_file),
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+        rotation="10 MB",
+        retention="1 week",
+        encoding="utf-8",
+    )
+    logger.add(sys.stderr, level="WARNING", format="{level}: {message}")
 
 
 def main() -> None:
@@ -47,6 +64,11 @@ def main() -> None:
     except ConfigError as e:
         print(f"配置加载失败: {e}", file=sys.stderr)
         sys.exit(1)
+
+    log_file = cfg.cache_dir / "logs" / "mineru-parse.log"
+    _setup_logging(log_file)
+    print(f"详细日志: {log_file}")
+
     token = (args.token or os.environ.get("MINERU_TOKEN", "") or cfg.token).strip()
 
     if args.from_json:

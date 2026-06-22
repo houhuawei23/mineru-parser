@@ -5,6 +5,7 @@ MinerU PDF 解析器 CLI 入口。
 """
 
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -16,6 +17,7 @@ from mineru_parser.api import parse_pdf_via_api_with_auto_split, parse_pdfs_conc
 from mineru_parser.config import ConfigError, load_config
 from mineru_parser.markdown import regenerate_markdown_from_json
 from mineru_parser.pdf_splitter import get_pdf_info
+from mineru_parser.progress import ProgressReporter, make_progress_callback
 from mineru_parser.state import BatchStateManager, JobStatus, get_state_file
 from mineru_parser.utils import collect_pdf_paths, resolve_input_to_pdf
 
@@ -26,15 +28,24 @@ app = typer.Typer(
 )
 
 
-def setup_logging(quiet: bool = False, debug: bool = False) -> None:
-    """配置 loguru 日志级别。"""
+def setup_logging(log_file: Path, quiet: bool = False, debug: bool = False) -> None:
+    """配置 loguru：文件记录详细日志，终端仅显示关键提示。"""
     logger.remove()
-    if quiet:
-        logger.add(sys.stderr, level="WARNING")
-    elif debug:
-        logger.add(sys.stderr, level="DEBUG")
-    else:
-        logger.add(sys.stderr, level="INFO")
+
+    # 文件 sink：完整运行日志，含时间、级别、位置等详细信息
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.add(
+        str(log_file),
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+        rotation="10 MB",
+        retention="1 week",
+        encoding="utf-8",
+    )
+
+    # 终端 sink：仅警告/错误，简洁格式
+    stderr_level = "DEBUG" if debug else "WARNING"
+    logger.add(sys.stderr, level=stderr_level, format="{level}: {message}")
 
 
 def version_callback(value: bool) -> None:
@@ -85,12 +96,19 @@ def main_callback(
     ),
 ) -> None:
     """MinerU PDF 解析器。"""
-    setup_logging(quiet=quiet, debug=debug)
+    # 在加载配置前移除默认 handler，避免配置加载阶段的 debug 日志直接输出到终端；
+    # 完整日志将在 setup_logging 中写入文件。
+    logger.remove()
     try:
         cfg = load_config(config_path)
     except ConfigError as e:
-        logger.error(str(e))
+        print(f"配置加载失败: {e}", file=sys.stderr)
         raise typer.Exit(1) from e
+
+    log_file = cfg.cache_dir / "logs" / "mineru-parse.log"
+    setup_logging(log_file=log_file, quiet=quiet, debug=debug)
+    typer.echo(f"详细日志: {log_file}")
+
     ctx.obj = {
         "config": cfg,
         "force": force,
@@ -98,6 +116,7 @@ def main_callback(
         "no_merge_paragraphs": no_merge_paragraphs,
         "no_inline_footnotes": no_inline_footnotes,
         "dry_run": dry_run,
+        "quiet": quiet,
     }
     if dry_run:
         typer.echo("[DRY RUN] 模拟模式 - 不会实际调用 API")
@@ -225,26 +244,40 @@ def parse_cmd(
     output_dir.mkdir(parents=True, exist_ok=True)
     model_version = model or cfg.model_version
     chunk_pages = target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
-    markdown = parse_pdf_via_api_with_auto_split(
-        pdf_path,
-        tok,
-        output_dir,
-        cfg,
-        base_url=cfg.base_url,
-        model_version=model_version,
-        poll_interval=cfg.poll_interval,
-        max_wait=cfg.max_wait,
-        cache_enabled=cfg.cache_enabled,
-        cache_dir=cfg.cache_dir,
-        use_cache=not ctx.obj["no_cache"],
-        pages_spec=pages,
-        target_chunk_pages=chunk_pages,
-        api_rate_limit=cfg.api_rate_limit,
-        **md_opts,
-    )
+
+    quiet = ctx.obj.get("quiet", False)
+    reporter = ProgressReporter(desc=f"解析 {pdf_path.name}", quiet=quiet)
+    progress_callback = make_progress_callback(reporter)
+    start_time = time.time()
+    try:
+        markdown = parse_pdf_via_api_with_auto_split(
+            pdf_path,
+            tok,
+            output_dir,
+            cfg,
+            base_url=cfg.base_url,
+            model_version=model_version,
+            poll_interval=cfg.poll_interval,
+            max_wait=cfg.max_wait,
+            cache_enabled=cfg.cache_enabled,
+            cache_dir=cfg.cache_dir,
+            use_cache=not ctx.obj["no_cache"],
+            pages_spec=pages,
+            target_chunk_pages=chunk_pages,
+            api_rate_limit=cfg.api_rate_limit,
+            progress_callback=progress_callback,
+            **md_opts,
+        )
+    finally:
+        reporter.close()
+
+    elapsed = time.time() - start_time
     if markdown:
         md_path = output_dir / f"{pdf_path.stem}.md"
-        typer.echo(f"解析成功，Markdown 长度: {len(markdown)} 字符，已保存: {md_path}")
+        typer.echo(
+            f"解析成功，Markdown 长度: {len(markdown)} 字符，"
+            f"已保存: {md_path}，耗时: {elapsed:.1f}s"
+        )
     else:
         raise typer.Exit(1)
 
@@ -421,14 +454,17 @@ def batch_cmd(
     with BatchStateManager(state_file) as state:
         if reset_failed:
             reset_count = state.reset_failed()
-            logger.info(f"已重置 {reset_count} 个失败任务")
+            typer.echo(f"已重置 {reset_count} 个失败任务")
 
         if resume:
             summary = state.get_summary()
             completed = summary.get(JobStatus.COMPLETED.value, 0)
             failed = summary.get(JobStatus.FAILED.value, 0)
             if completed > 0 or failed > 0:
-                logger.info(f"断点续传模式: 已完成 {completed} 个, 失败 {failed} 个, 待处理 {summary.get(JobStatus.PENDING.value, 0)} 个")
+                typer.echo(
+                    f"断点续传模式: 已完成 {completed} 个, 失败 {failed} 个, "
+                    f"待处理 {summary.get(JobStatus.PENDING.value, 0)} 个"
+                )
 
         # Create/update job records
         for pdf_path in paths:
@@ -440,10 +476,10 @@ def batch_cmd(
             paths = [p for p in paths if state.should_process(str(p), resume=True)]
             skipped = original_count - len(paths)
             if skipped > 0:
-                logger.info(f"跳过 {skipped} 个已处理/处理中的文件")
+                typer.echo(f"跳过 {skipped} 个已处理/处理中的文件")
 
         if not paths:
-            logger.info("没有需要处理的文件")
+            typer.echo("没有需要处理的文件")
             raise typer.Exit(0)
 
         failed = 0
@@ -513,10 +549,10 @@ def batch_cmd(
                     })
 
             if not pdf_tasks:
-                logger.info("没有需要处理的文件")
+                typer.echo("没有需要处理的文件")
                 raise typer.Exit(0)
 
-            logger.info(f"并发模式: {batch_conc} 个文件同时处理, API 并发限制 {cfg.api_rate_limit}")
+            typer.echo(f"并发模式: {batch_conc} 个文件同时处理, API 并发限制 {cfg.api_rate_limit}")
 
             with tqdm(total=len(pdf_tasks), desc="解析 PDF") as pbar:
                 def on_file_complete(idx, result):

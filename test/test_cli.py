@@ -46,7 +46,7 @@ class TestMainCallback:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "mineru-parse" in result.output
-        assert "1.3.0" in result.output
+        assert "1.4.0" in result.output
 
     def test_help_shows_commands(self) -> None:
         """验证 --help 显示所有命令。"""
@@ -57,7 +57,7 @@ class TestMainCallback:
         assert "from-json" in result.output
 
     def test_debug_flag_sets_debug_logging(self) -> None:
-        """验证 --debug 设置调试日志级别。"""
+        """验证 --debug 设置调试日志级别，并传入日志文件路径。"""
         with patch("mineru_parser.cli.setup_logging") as mock_setup:
             result = runner.invoke(app, ["--debug", "parse", "--help"])
             assert result.exit_code == 0
@@ -65,15 +65,20 @@ class TestMainCallback:
             mock_setup.assert_called_once()
             call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else mock_setup.call_args[1]
             assert call_kwargs.get("debug") is True
+            assert call_kwargs.get("log_file") is not None
+            assert "mineru-parse.log" in str(call_kwargs.get("log_file"))
+            assert "详细日志:" in result.output
 
     def test_quiet_flag_sets_warning_logging(self) -> None:
-        """验证 --quiet 设置警告日志级别。"""
+        """验证 --quiet 设置静默日志级别，并传入日志文件路径。"""
         with patch("mineru_parser.cli.setup_logging") as mock_setup:
             result = runner.invoke(app, ["--quiet", "parse", "--help"])
             assert result.exit_code == 0
             mock_setup.assert_called_once()
             call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else mock_setup.call_args[1]
             assert call_kwargs.get("quiet") is True
+            assert call_kwargs.get("log_file") is not None
+            assert "mineru-parse.log" in str(call_kwargs.get("log_file"))
 
 
 class TestParseCommand:
@@ -141,7 +146,44 @@ class TestParseCommand:
 
         assert result.exit_code == 0
         assert "解析成功" in result.output
+        assert "耗时" in result.output
         mock_parse.assert_called_once()
+
+    @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
+    @patch("mineru_parser.cli.load_config")
+    def test_parse_passes_progress_callback(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+        """验证 parse 命令向 API 调用传入进度回调。"""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"fake pdf content")
+
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
+        mock_load_config.return_value = mock_config
+        mock_parse.return_value = "# Parsed"
+
+        result = runner.invoke(app, ["parse", str(pdf_file)])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_parse.call_args.kwargs
+        assert "progress_callback" in call_kwargs
+        assert call_kwargs["progress_callback"] is not None
+
+    @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
+    @patch("mineru_parser.cli.load_config")
+    def test_parse_quiet_suppresses_progress(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+        """验证 --quiet 不输出进度信息，但保留最终结果。"""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"fake pdf content")
+
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
+        mock_load_config.return_value = mock_config
+        mock_parse.return_value = "# Parsed"
+
+        result = runner.invoke(app, ["--quiet", "parse", str(pdf_file)])
+
+        assert result.exit_code == 0
+        assert "开始解析" not in result.output
+        assert "命中缓存" not in result.output
+        assert "解析成功" in result.output
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
@@ -247,6 +289,7 @@ class TestFromJsonCommand:
         mock_config.markdown.include_footnote = True
         mock_config.markdown.merge_paragraphs = True
         mock_config.markdown.inline_footnotes = True
+        mock_config.cache_dir = tmp_path / "cache"
         mock_load_config.return_value = mock_config
 
         mock_regenerate.return_value = "# Regenerated Markdown"

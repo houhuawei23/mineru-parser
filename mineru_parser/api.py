@@ -8,7 +8,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 import requests
 from loguru import logger
@@ -181,6 +181,7 @@ def poll_batch_result(
     max_wait: int,
     timeout: int,
     session: requests.Session | None = None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict | None:
     """轮询批量任务结果，直到 state=done 或失败或超时。"""
     url = f"{base_url}/extract-results/batch/{batch_id}"
@@ -212,11 +213,21 @@ def poll_batch_result(
                 logger.error(f"解析失败: {first.get('err_msg', '未知原因')}")
                 return None
             progress = first.get("extract_progress", {})
+            poll_info: dict[str, Any] = {
+                "state": state,
+                "elapsed": time.time() - start,
+            }
             if progress:
+                extracted = progress.get("extracted_pages")
+                total = progress.get("total_pages")
+                poll_info["extracted_pages"] = extracted
+                poll_info["total_pages"] = total
                 logger.debug(
                     f"状态: {state}, "
-                    f"{progress.get('extracted_pages', '?')}/{progress.get('total_pages', '?')}"
+                    f"{extracted or '?'}/{total or '?'}"
                 )
+            if progress_callback is not None:
+                progress_callback("poll", poll_info)
             time.sleep(poll_interval)
         except requests.RequestException as e:
             logger.warning(f"轮询异常: {e}")
@@ -289,6 +300,7 @@ def parse_pdf_via_api(
     save_zip_to_output: bool = False,
     output_md_name: str | None = None,
     session: requests.Session | None = None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str | None:
     """
     上传 PDF 到 MinerU API 解析，下载 zip，解压并生成 Markdown。
@@ -298,6 +310,7 @@ def parse_pdf_via_api(
     :param save_zip_to_output: 是否将 zip 保存到输出目录旁（默认否，仅缓存）
     :param output_md_name: 输出 md 文件名，默认 {pdf_stem}.md
     :param session: 可选的 requests Session，用于连接复用
+    :param progress_callback: 进度回调，接收 (phase, info)
     :return: markdown 字符串，失败返回 None
     """
     _session = session or get_session()
@@ -311,12 +324,16 @@ def parse_pdf_via_api(
 
     if not pdf_path.exists():
         logger.error(f"文件不存在: {pdf_path}")
+        if progress_callback is not None:
+            progress_callback("error", {"error": f"文件不存在: {pdf_path}"})
         return None
 
     # 尝试从缓存获取
     if cache_enabled and use_cache:
         zip_content = get_cached_zip(pdf_path, _cache_dir, config, model_version)
         if zip_content is not None:
+            if progress_callback is not None:
+                progress_callback("cache_hit", {})
             output_dir.mkdir(parents=True, exist_ok=True)
             if save_zip_to_output:
                 zip_path = output_dir.parent / f"{pdf_path.stem}{zip_suffix}"
@@ -324,6 +341,8 @@ def parse_pdf_via_api(
                 logger.info(f"已保存 zip: {zip_path}")
             else:
                 logger.debug("命中缓存，zip 已保存至缓存目录")
+            if progress_callback is not None:
+                progress_callback("build", {})
             markdown = build_markdown_from_zip(
                 zip_content,
                 output_dir,
@@ -338,20 +357,30 @@ def parse_pdf_via_api(
             )
             return markdown
 
+    if progress_callback is not None:
+        progress_callback("upload", {})
     logger.info("正在申请上传链接...")
     apply_result = apply_upload_urls(
         token, base_url, pdf_path.name, model_version, config.request_timeout_apply, session=_session
     )
     if not apply_result:
+        if progress_callback is not None:
+            progress_callback("error", {"error": "申请上传链接失败"})
         return None
     batch_id = apply_result["batch_id"]
     file_urls = apply_result["file_urls"]
     logger.info(f"batch_id: {batch_id}")
+    if progress_callback is not None:
+        progress_callback("upload", {"batch_id": batch_id})
 
     logger.info("正在上传文件...")
     if not upload_file_to_url(pdf_path, file_urls[0], config.request_timeout_upload, session=_session):
+        if progress_callback is not None:
+            progress_callback("error", {"error": "上传文件失败"})
         return None
     logger.info("上传成功，等待解析...")
+    if progress_callback is not None:
+        progress_callback("upload_done", {})
 
     result = poll_batch_result(
         token,
@@ -361,13 +390,20 @@ def parse_pdf_via_api(
         max_wait,
         config.request_timeout_poll,
         session=_session,
+        progress_callback=progress_callback,
     )
     if not result:
+        if progress_callback is not None:
+            progress_callback("error", {"error": "解析失败或超时"})
         return None
     zip_url = result.get("full_zip_url")
     if not zip_url:
+        if progress_callback is not None:
+            progress_callback("error", {"error": "state=done 但无 full_zip_url"})
         return None
 
+    if progress_callback is not None:
+        progress_callback("download", {})
     logger.info("正在下载解析结果...")
     zip_content = download_zip(
         zip_url,
@@ -378,6 +414,8 @@ def parse_pdf_via_api(
         session=_session,
     )
     if not zip_content:
+        if progress_callback is not None:
+            progress_callback("error", {"error": "下载解析结果失败"})
         return None
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -390,6 +428,8 @@ def parse_pdf_via_api(
     if cache_enabled and use_cache:
         save_to_cache(pdf_path, zip_content, _cache_dir, config, model_version)
 
+    if progress_callback is not None:
+        progress_callback("build", {})
     markdown = build_markdown_from_zip(
         zip_content,
         output_dir,
@@ -429,6 +469,7 @@ def parse_pdf_via_api_with_auto_split(
     cache_dir: Path | None = None,
     use_cache: bool = True,
     pages_spec: str | None = None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str | None:
     """
     解析 PDF，若超出页数/大小限制则自动切分、并发处理、合并结果。
@@ -439,6 +480,7 @@ def parse_pdf_via_api_with_auto_split(
     :param api_rate_limit: API 并发限制（信号量），默认 5
     :param target_chunk_pages: 自适应分片目标页数，0=仅超限切分（默认），>0=始终切分到此大小
     :param pages_spec: 可选，仅解析指定页，格式如 ``10-20,30-40``（1-based，与 CLI --pages 一致）
+    :param progress_callback: 进度回调，接收 (phase, info)
     :return: markdown 字符串，失败返回 None
     """
     file_size_limit_mb = file_size_limit_mb or config.file_size_limit_mb
@@ -453,6 +495,8 @@ def parse_pdf_via_api_with_auto_split(
 
     if not pdf_path.exists():
         logger.error(f"文件不存在: {pdf_path}")
+        if progress_callback is not None:
+            progress_callback("error", {"error": f"文件不存在: {pdf_path}"})
         return None
 
     working_pdf = pdf_path
@@ -466,6 +510,8 @@ def parse_pdf_via_api_with_auto_split(
             logger.error(
                 "页码范围未选中任何有效页面（可能全部超出 PDF 页数），请检查 --pages"
             )
+            if progress_callback is not None:
+                progress_callback("error", {"error": "页码范围未选中任何有效页面"})
             return None
         try:
             tf = tempfile.NamedTemporaryFile(
@@ -480,12 +526,25 @@ def parse_pdf_via_api_with_auto_split(
             logger.error(f"按页码提取 PDF 失败: {e}")
             if temp_extracted is not None:
                 temp_extracted.unlink(missing_ok=True)
+            if progress_callback is not None:
+                progress_callback("error", {"error": f"按页码提取 PDF 失败: {e}"})
             return None
         working_pdf = temp_extracted
         logger.info(f"已按 --pages 提取 {len(indices)} 页用于解析")
 
     size_limit_bytes = int(file_size_limit_mb * 1024 * 1024)
     num_pages, size_bytes = get_pdf_info(working_pdf)
+
+    if progress_callback is not None:
+        progress_callback(
+            "start",
+            {
+                "pdf_path": str(pdf_path),
+                "num_pages": num_pages,
+                "size_bytes": size_bytes,
+                "size_mb": size_bytes / 1024 / 1024,
+            },
+        )
 
     md_name = f"{md_stem}.md"
 
@@ -516,6 +575,7 @@ def parse_pdf_via_api_with_auto_split(
             use_cache=use_cache,
             api_rate_limit=api_rate_limit,
             target_chunk_pages=target_chunk_pages,
+            progress_callback=progress_callback,
         )
     finally:
         if temp_extracted is not None:
@@ -548,6 +608,7 @@ def _parse_pdf_via_api_with_auto_split_body(
     use_cache: bool,
     api_rate_limit: int = DEFAULT_API_RATE_LIMIT,
     target_chunk_pages: int = 0,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str | None:
     # 判断是否需要切分
     needs_split = (
@@ -577,6 +638,7 @@ def _parse_pdf_via_api_with_auto_split_body(
             use_cache=use_cache,
             save_zip_to_output=False,
             output_md_name=md_name,
+            progress_callback=progress_callback,
         )
 
     # 需要切分：片段输出到临时目录，合并后仅保留 xx.md 和 images/
@@ -598,6 +660,9 @@ def _parse_pdf_via_api_with_auto_split_body(
                 size_limit_bytes=size_limit_bytes,
                 temp_dir=temp_dir,
             )
+
+        if progress_callback is not None:
+            progress_callback("split", {"total_parts": len(split_paths)})
 
         md_opts = dict(
             include_header=include_header,
@@ -651,16 +716,28 @@ def _parse_pdf_via_api_with_auto_split_body(
                 idx, result = fut.result()
                 if result:
                     part_results[idx] = result
+                    if progress_callback is not None:
+                        progress_callback(
+                            "part_complete",
+                            {"idx": idx, "total": len(split_paths)},
+                        )
                 else:
                     failed += 1
 
         if failed > 0:
             logger.error(f"有 {failed}/{len(split_paths)} 个片段解析失败")
+            if progress_callback is not None:
+                progress_callback(
+                    "error",
+                    {"error": f"有 {failed}/{len(split_paths)} 个片段解析失败"},
+                )
             return None
 
         part_output_dirs = [part_results[i] for i in range(len(split_paths))]
 
         output_dir.mkdir(parents=True, exist_ok=True)
+        if progress_callback is not None:
+            progress_callback("merge", {})
         merged = merge_markdown_parts(
             part_output_dirs,
             output_dir,

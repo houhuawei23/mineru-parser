@@ -20,6 +20,8 @@
 - 图片后处理（仅保留被引用图片，统一重命名为 `image_xx.png`）
 - 支持从 `content_list.json` / `content_list_v2.json` 重新生成 Markdown
 - 对 MinerU 识别的 flowchart 图片自动保留 mermaid 代码块
+- 自动将 MinerU 输出的 HTML `<table>` 转换为标准 Markdown 表格
+- `parse` 命令实时显示解析进度、耗时与结果，避免长时间等待时看起来像卡死
 
 ## 项目结构
 
@@ -35,6 +37,7 @@ mineru-parser/
 │   ├── json_parser.py        # content_list JSON -> Markdown
 │   ├── markdown.py           # Markdown 生成与合并
 │   ├── pdf_splitter.py       # PDF 按页/大小切分
+│   ├── progress.py           # CLI 进度报告
 │   ├── state.py              # 批量任务状态管理（断点续传）
 │   └── utils.py              # URL 解析与下载等工具
 ├── test/                     # 单元测试
@@ -290,6 +293,18 @@ pytest --cov=mineru_parser --cov-report=html
 - 建议定期轮换 Token
 
 ## 版本历史
+
+### v1.4.0 (2026-06-22)
+
+- **新增**：自动将 MinerU 输出的 HTML `<table>` 转换为标准 Markdown 表格格式
+  - 支持 `colspan` / `rowspan` 展开、`<th>` 表头识别、管道符转义
+- **新增**：`mineru-parse parse` 命令实时显示解析进度、耗时与结果
+  - 阶段提示：文件信息、缓存命中、上传、下载、Markdown 生成
+  - 轮询阶段使用 `tqdm` 进度条或动态计数，避免看起来像卡死
+- **新增**：`mineru_parser/progress.py` 进度报告模块与 `test/test_progress.py` 测试
+- **文档**：更新 README、CHANGELOG、版本号
+- **署名**：本版本由 kimi-code（kimi-k2.7）共同开发
+- 测试：123 个测试全部通过
 
 ### v1.3.0 (2026-06-16)
 

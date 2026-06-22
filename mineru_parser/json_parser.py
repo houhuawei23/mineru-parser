@@ -1,9 +1,11 @@
 """JSON 解析模块：查找并解析 MinerU content_list JSON。"""
 
+import html
 import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
 
 from loguru import logger
@@ -73,6 +75,207 @@ def sanitize_text(text: str) -> str:
     cleaned = "".join(c for c in cleaned if c not in _ZERO_WIDTH_CHARS)
     # 统一换行
     return cleaned.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _find_html_table_ranges(text: str) -> list[tuple[int, int]]:
+    """查找顶层 <table>...</table> 区间，支持嵌套。"""
+    ranges: list[tuple[int, int]] = []
+    stack: list[int] = []
+    i = 0
+    text_lower = text.lower()
+    while i < len(text):
+        if text_lower.startswith("<table", i):
+            # 跳过到该标签结束
+            j = text.find(">", i)
+            if j == -1:
+                break
+            stack.append(i)
+            i = j + 1
+        elif text_lower.startswith("</table>", i):
+            if stack:
+                start = stack.pop()
+                if not stack:
+                    ranges.append((start, i + len("</table>")))
+            i += len("</table>")
+        else:
+            i += 1
+    return ranges
+
+
+class _TableHTMLParser(HTMLParser):
+    """解析单个 HTML 表格为带行列跨度信息的单元格列表。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[list[tuple[str, str, int, int]]] = []
+        self._current_cells: list[tuple[str, str, int, int]] = []
+        self._cell_parts: list[str] = []
+        self._cell_tag: str = "td"
+        self._colspan: int = 1
+        self._rowspan: int = 1
+        self._in_table: bool = False
+        self._in_cell: bool = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = {k: v for k, v in attrs if v is not None}
+        if tag == "table":
+            self._in_table = True
+            self.rows = []
+        elif tag == "tr" and self._in_table:
+            self._current_cells = []
+        elif tag in ("td", "th") and self._in_table:
+            self._in_cell = True
+            self._cell_tag = tag
+            self._colspan = max(1, int(attrs_dict.get("colspan", 1) or 1))
+            self._rowspan = max(1, int(attrs_dict.get("rowspan", 1) or 1))
+            self._cell_parts = []
+        elif tag == "br" and self._in_cell:
+            self._cell_parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._in_cell:
+            cell_text = "".join(self._cell_parts)
+            cell_text = html.unescape(cell_text)
+            cell_text = re.sub(r"\s+", " ", cell_text).strip()
+            self._current_cells.append(
+                (cell_text, self._cell_tag, self._colspan, self._rowspan)
+            )
+            self._in_cell = False
+        elif tag == "tr" and self._in_table:
+            self.rows.append(self._current_cells)
+        elif tag == "table" and self._in_table:
+            self._in_table = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_cell:
+            self._cell_parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self._in_cell:
+            self._cell_parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self._in_cell:
+            self._cell_parts.append(f"&#{name};")
+
+
+def _expand_html_table(
+    rows: list[list[tuple[str, str, int, int]]],
+) -> tuple[list[list[str]], int]:
+    """
+    将带 colspan/rowspan 的表格展开为规则二维网格。
+
+    返回 (grid, header_rows)，其中 header_rows 为包含 <th> 的行数；
+    无 <th> 时默认首行为表头。
+    """
+    if not rows:
+        return [], 0
+
+    # 先展开 colspan，并记录每个单元格是否为表头
+    expanded_rows: list[list[tuple[str, int]]] = []
+    header_tags: list[list[bool]] = []
+    for row in rows:
+        new_row: list[tuple[str, int]] = []
+        headers: list[bool] = []
+        for text, tag, colspan, rowspan in row:
+            for _ in range(colspan):
+                new_row.append((text, rowspan))
+                headers.append(tag == "th")
+        expanded_rows.append(new_row)
+        header_tags.append(headers)
+
+    max_cols = max(len(r) for r in expanded_rows) if expanded_rows else 0
+
+    # 展开 rowspan
+    grid: list[list[str]] = []
+    pending: list[list[tuple[str, int]]] = [[] for _ in range(max_cols)]
+
+    for row in expanded_rows:
+        new_row: list[str | None] = [None] * max_cols
+        # 放置尚未结束的 rowspan 单元格
+        for c in range(max_cols):
+            if pending[c]:
+                text, remaining = pending[c][0]
+                new_row[c] = text
+                pending[c][0] = (text, remaining - 1)
+                if pending[c][0][1] <= 0:
+                    pending[c].pop(0)
+        # 放置当前行单元格
+        col = 0
+        for text, rowspan in row:
+            while col < max_cols and new_row[col] is not None:
+                col += 1
+            if col >= max_cols:
+                break
+            new_row[col] = text
+            if rowspan > 1:
+                pending[col].append((text, rowspan - 1))
+            col += 1
+        grid.append([c if c is not None else "" for c in new_row])
+
+    # 确定表头行数：包含 <th> 的最后一行；没有 <th> 时默认首行为表头
+    header_rows = 0
+    for i, row in enumerate(header_tags):
+        if any(row):
+            header_rows = i + 1
+    if header_rows == 0:
+        header_rows = 1
+
+    return grid, header_rows
+
+
+def _escape_markdown_table_cell(text: str) -> str:
+    """转义 Markdown 表格单元格中的管道符与换行。"""
+    text = text.replace("|", "\\|")
+    text = text.replace("\n", " ")
+    return text
+
+
+def _format_markdown_table(grid: list[list[str]], header_rows: int) -> str:
+    """将规则网格格式化为 Markdown 表格。"""
+    if not grid or not grid[0]:
+        return ""
+    lines: list[str] = []
+    for i in range(header_rows):
+        lines.append(
+            "| " + " | ".join(_escape_markdown_table_cell(c) for c in grid[i]) + " |"
+        )
+    if header_rows > 0 and len(grid) > header_rows:
+        lines.append(
+            "| " + " | ".join("---" for _ in grid[0]) + " |"
+        )
+    for i in range(header_rows, len(grid)):
+        lines.append(
+            "| " + " | ".join(_escape_markdown_table_cell(c) for c in grid[i]) + " |"
+        )
+    return "\n".join(lines)
+
+
+def _convert_single_html_table(table_html: str) -> str:
+    """将单个 HTML 表格字符串转换为 Markdown 表格。"""
+    parser = _TableHTMLParser()
+    parser.feed(table_html)
+    grid, header_rows = _expand_html_table(parser.rows)
+    return _format_markdown_table(grid, header_rows)
+
+
+def convert_html_tables_to_markdown(text: str) -> str:
+    """
+    将文本中所有 HTML <table> 块转换为 Markdown 表格格式。
+
+    支持 colspan 与 rowspan 的基本展开，保留 <th> 表头或默认首行为表头。
+    """
+    ranges = _find_html_table_ranges(text)
+    if not ranges:
+        return text
+    parts: list[str] = []
+    prev = 0
+    for start, end in ranges:
+        parts.append(text[prev:start])
+        parts.append(_convert_single_html_table(text[start:end]))
+        prev = end
+    parts.append(text[prev:])
+    return "".join(parts)
 
 
 @dataclass
@@ -462,7 +665,7 @@ def content_list_json_to_markdown(
 
     # 合并段落并生成输出
     merged_blocks = _merge_paragraphs(flat_blocks, merge_paragraphs)
-    return _generate_markdown_output(
+    markdown = _generate_markdown_output(
         merged_blocks,
         pages_meta,
         pages_footnotes,
@@ -472,6 +675,7 @@ def content_list_json_to_markdown(
         include_footnote=include_footnote,
         inline_footnotes=inline_footnotes,
     )
+    return convert_html_tables_to_markdown(markdown)
 
 
 def _build_image_markdown_v2(item: dict) -> str:
@@ -687,7 +891,7 @@ def content_list_v2_to_markdown(
 
     # 合并段落并生成输出
     merged_blocks = _merge_paragraphs(flat_blocks, merge_paragraphs)
-    return _generate_markdown_output(
+    markdown = _generate_markdown_output(
         merged_blocks,
         pages_meta,
         pages_footnotes,
@@ -697,3 +901,4 @@ def content_list_v2_to_markdown(
         include_footnote=include_footnote,
         inline_footnotes=inline_footnotes,
     )
+    return convert_html_tables_to_markdown(markdown)
