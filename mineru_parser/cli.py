@@ -155,7 +155,7 @@ def parse_cmd(
     ),
     output: Path | None = typer.Option(
         None, "-o", "--output", path_type=Path,
-        help="输出目录或 Markdown 路径",
+        help="输出目录或 Markdown 路径（默认：{stem}/full.md）",
     ),
     token: str | None = typer.Option(
         None, "-t", "--token",
@@ -214,7 +214,12 @@ def parse_cmd(
         if not result[0]:
             raise typer.Exit(1)
         pdf_path, stem = result
-        output_dir = out_dir / f"{stem}{cfg.output_parsed_suffix}"
+        if output:
+            output_dir = out_dir / f"{stem}{cfg.output_parsed_suffix}"
+            md_name = f"{stem}.md"
+        else:
+            output_dir = out_dir / stem
+            md_name = "full.md"
     else:
         p = Path(input_path)
         if not p.exists():
@@ -224,9 +229,15 @@ def parse_cmd(
             logger.error("输入不是 PDF 文件")
             raise typer.Exit(1)
         pdf_path = p
-        output_dir = output or (p.parent / f"{p.stem}{cfg.output_parsed_suffix}")
-        if output and output.suffix == ".md":
-            output_dir = output.parent / f"{p.stem}{cfg.output_parsed_suffix}"
+        if output:
+            if output.suffix == ".md":
+                output_dir = output.parent / f"{p.stem}{cfg.output_parsed_suffix}"
+            else:
+                output_dir = output
+            md_name = f"{p.stem}.md"
+        else:
+            output_dir = p.parent / p.stem
+            md_name = "full.md"
 
     force_overwrite = force or ctx.obj.get("force", False)
     if output_dir.exists() and not force_overwrite:
@@ -266,6 +277,7 @@ def parse_cmd(
             target_chunk_pages=chunk_pages,
             api_rate_limit=cfg.api_rate_limit,
             progress_callback=progress_callback,
+            output_md_name=md_name,
             **md_opts,
         )
     finally:
@@ -273,7 +285,7 @@ def parse_cmd(
 
     elapsed = time.time() - start_time
     if markdown:
-        md_path = output_dir / f"{pdf_path.stem}.md"
+        md_path = output_dir / md_name
         typer.echo(
             f"解析成功，Markdown 长度: {len(markdown)} 字符，"
             f"已保存: {md_path}，耗时: {elapsed:.1f}s"

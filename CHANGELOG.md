@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.5.0 (2026-06-22)
+
+### Changed
+
+- `mineru-parse parse` 命令默认输出路径调整为 `{stem}/full.md`。
+  - 输入 `table.pdf` 时，默认输出 `.examples/table/full.md`。
+  - 使用 `-o/--output` 显式指定输出目录或 Markdown 路径时，保持原有 `{stem}.md` 文件名行为。
+
+### Tests
+
+- 新增 `test/test_cli.py`：验证默认输出路径为 `{stem}_parsed/{stem}/full.md`，且 `output_md_name` 正确传递。
+- 完整测试套件：124 个测试全部通过。
+
+### Contributors
+
+- mineru-parser contributors
+- kimi-code（Kimi AI Agent）
+- kimi-k2.7（Kimi 大语言模型）
+
 ## v1.4.0 (2026-06-22)
 
 ### Added

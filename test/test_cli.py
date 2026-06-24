@@ -46,7 +46,7 @@ class TestMainCallback:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "mineru-parse" in result.output
-        assert "1.4.0" in result.output
+        assert "1.5.0" in result.output
 
     def test_help_shows_commands(self) -> None:
         """验证 --help 显示所有命令。"""
@@ -148,6 +148,25 @@ class TestParseCommand:
         assert "解析成功" in result.output
         assert "耗时" in result.output
         mock_parse.assert_called_once()
+
+    @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
+    @patch("mineru_parser.cli.load_config")
+    def test_parse_default_output_uses_full_md(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+        """验证默认输出路径为 {stem}_parsed/{stem}/full.md。"""
+        pdf_file = tmp_path / "table.pdf"
+        pdf_file.write_bytes(b"fake pdf content")
+
+        mock_config = _make_mock_config(cache_dir=tmp_path / "cache")
+        mock_load_config.return_value = mock_config
+        mock_parse.return_value = "# Parsed"
+
+        result = runner.invoke(app, ["parse", str(pdf_file)])
+
+        assert result.exit_code == 0
+        call_args = mock_parse.call_args
+        assert call_args.args[2] == tmp_path / "table"
+        assert call_args.kwargs.get("output_md_name") == "full.md"
+        assert "table/full.md" in result.output
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")

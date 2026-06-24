@@ -237,12 +237,17 @@ markdown:
 
 ## 输出说明
 
-默认输出目录：`<pdf_stem>_parsed/`
+默认输出路径：`<pdf_stem>/full.md`
 
-典型内容：
+即输入 `paper.pdf` 时，默认生成：
 
-- `<pdf_stem>.md`：最终 Markdown
-- `images/`：被 Markdown 引用的图片（统一为 PNG）
+```
+paper/
+├── full.md      # 最终 Markdown
+└── images/      # 被 Markdown 引用的图片（统一为 PNG）
+```
+
+使用 `-o/--output` 显式指定输出目录或 Markdown 路径时，保持原有行为：输出文件名为 `<pdf_stem>.md`，并位于指定的输出目录下。
 
 ## 测试
 

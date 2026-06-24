@@ -470,6 +470,7 @@ def parse_pdf_via_api_with_auto_split(
     use_cache: bool = True,
     pages_spec: str | None = None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    output_md_name: str | None = None,
 ) -> str | None:
     """
     解析 PDF，若超出页数/大小限制则自动切分、并发处理、合并结果。
@@ -481,6 +482,7 @@ def parse_pdf_via_api_with_auto_split(
     :param target_chunk_pages: 自适应分片目标页数，0=仅超限切分（默认），>0=始终切分到此大小
     :param pages_spec: 可选，仅解析指定页，格式如 ``10-20,30-40``（1-based，与 CLI --pages 一致）
     :param progress_callback: 进度回调，接收 (phase, info)
+    :param output_md_name: 输出 Markdown 文件名，默认 {pdf_stem}.md
     :return: markdown 字符串，失败返回 None
     """
     file_size_limit_mb = file_size_limit_mb or config.file_size_limit_mb
@@ -546,7 +548,7 @@ def parse_pdf_via_api_with_auto_split(
             },
         )
 
-    md_name = f"{md_stem}.md"
+    md_name = output_md_name or f"{md_stem}.md"
 
     try:
         return _parse_pdf_via_api_with_auto_split_body(
