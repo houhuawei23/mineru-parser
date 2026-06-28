@@ -130,13 +130,17 @@ def apply_upload_urls(
     data = {"files": [{"name": file_name}], "model_version": model_version}
     _session = session or get_session()
     try:
-        resp = _session.post(url, headers=get_headers(token), json=data, timeout=timeout)
+        resp = _session.post(
+            url, headers=get_headers(token), json=data, timeout=timeout
+        )
         if resp.status_code != 200:
             logger.error(f"申请上传链接失败: HTTP {resp.status_code}")
             return None
         body = resp.json()
         if body.get("code") != 0:
-            logger.error(f"申请上传链接失败: code={body.get('code')}, msg={body.get('msg')}")
+            logger.error(
+                f"申请上传链接失败: code={body.get('code')}, msg={body.get('msg')}"
+            )
             return None
         data_obj = body.get("data", {})
         file_urls = data_obj.get("file_urls") or data_obj.get("files")
@@ -222,10 +226,7 @@ def poll_batch_result(
                 total = progress.get("total_pages")
                 poll_info["extracted_pages"] = extracted
                 poll_info["total_pages"] = total
-                logger.debug(
-                    f"状态: {state}, "
-                    f"{extracted or '?'}/{total or '?'}"
-                )
+                logger.debug(f"状态: {state}, {extracted or '?'}/{total or '?'}")
             if progress_callback is not None:
                 progress_callback("poll", poll_info)
             time.sleep(poll_interval)
@@ -247,6 +248,7 @@ def download_zip(
     """下载 zip 内容，支持重试。"""
     import random
     import urllib3
+
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     header_variants = [
@@ -273,7 +275,10 @@ def download_zip(
                         if not verify_ssl:
                             logger.warning("已通过关闭 SSL 校验完成下载")
                         return resp.content
-                except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+                except (
+                    requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                ) as e:
                     last_error = e
     logger.error(f"下载 zip 失败（已重试 {max_retries} 次）: {last_error}")
     return None
@@ -361,7 +366,12 @@ def parse_pdf_via_api(
         progress_callback("upload", {})
     logger.info("正在申请上传链接...")
     apply_result = apply_upload_urls(
-        token, base_url, pdf_path.name, model_version, config.request_timeout_apply, session=_session
+        token,
+        base_url,
+        pdf_path.name,
+        model_version,
+        config.request_timeout_apply,
+        session=_session,
     )
     if not apply_result:
         if progress_callback is not None:
@@ -374,7 +384,9 @@ def parse_pdf_via_api(
         progress_callback("upload", {"batch_id": batch_id})
 
     logger.info("正在上传文件...")
-    if not upload_file_to_url(pdf_path, file_urls[0], config.request_timeout_upload, session=_session):
+    if not upload_file_to_url(
+        pdf_path, file_urls[0], config.request_timeout_upload, session=_session
+    ):
         if progress_callback is not None:
             progress_callback("error", {"error": "上传文件失败"})
         return None

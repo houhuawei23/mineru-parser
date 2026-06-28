@@ -129,7 +129,9 @@ def split_pdf_by_limits(
     if num_pages <= page_limit and size_bytes <= size_limit_bytes:
         return [pdf_path]
 
-    logger.info(f"PDF 超出限制（{num_pages} 页、{size_bytes / 1024 / 1024:.1f} MB），将自动切分")
+    logger.info(
+        f"PDF 超出限制（{num_pages} 页、{size_bytes / 1024 / 1024:.1f} MB），将自动切分"
+    )
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
@@ -138,7 +140,10 @@ def split_pdf_by_limits(
     # 计算每片页数：优先满足页数限制，若单页均摊大小仍超限则进一步切分
     pages_per_chunk = page_limit
     avg_bytes_per_page = size_bytes / num_pages if num_pages else 0
-    if avg_bytes_per_page > 0 and pages_per_chunk * avg_bytes_per_page > size_limit_bytes:
+    if (
+        avg_bytes_per_page > 0
+        and pages_per_chunk * avg_bytes_per_page > size_limit_bytes
+    ):
         pages_per_chunk = max(1, int(size_limit_bytes / avg_bytes_per_page))
 
     output_paths: list[Path] = []
@@ -191,9 +196,7 @@ def split_pdf_adaptive(
         return split_pdf_by_limits(pdf_path, page_limit, size_limit_bytes, temp_dir)
 
     # 未超限且不需要自适应分片的情况已在上面处理
-    logger.info(
-        f"自适应分片：{num_pages} 页，目标每片 {target_chunk_pages} 页"
-    )
+    logger.info(f"自适应分片：{num_pages} 页，目标每片 {target_chunk_pages} 页")
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
@@ -202,7 +205,10 @@ def split_pdf_adaptive(
     # 计算每片页数：优先使用 target_chunk_pages，再检查大小限制
     pages_per_chunk = target_chunk_pages
     avg_bytes_per_page = size_bytes / num_pages if num_pages else 0
-    if avg_bytes_per_page > 0 and pages_per_chunk * avg_bytes_per_page > size_limit_bytes:
+    if (
+        avg_bytes_per_page > 0
+        and pages_per_chunk * avg_bytes_per_page > size_limit_bytes
+    ):
         pages_per_chunk = max(1, int(size_limit_bytes / avg_bytes_per_page))
         logger.info(f"按大小限制调整每片页数为 {pages_per_chunk}")
 

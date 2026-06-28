@@ -48,6 +48,7 @@ def demo_from_json(parsed_dir: str | Path) -> None:
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         demo_from_json(sys.argv[1])
     else:

@@ -522,6 +522,8 @@ class TestDownloadZip:
 
         # 验证使用了不同的 headers
         calls = mock_session.get.call_args_list
-        headers_used = [call.kwargs.get("headers") or call[1].get("headers") for call in calls]
+        headers_used = [
+            call.kwargs.get("headers") or call[1].get("headers") for call in calls
+        ]
         # 至少有两种不同的 headers 被尝试
         assert len(set(str(h) for h in headers_used)) >= 1

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mineru-parser"
-version = "1.5.0"
+version = "1.5.1"
 description = "使用 MinerU API 解析 PDF 为 Markdown，支持页眉、页脚、页码、脚注"
 readme = "README.md"
 requires-python = ">=3.10"

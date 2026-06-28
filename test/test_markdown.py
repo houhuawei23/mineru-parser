@@ -1,6 +1,5 @@
 """Markdown 生成模块单元测试。"""
 
-
 from mineru_parser.markdown import remove_line_number_blocks
 
 

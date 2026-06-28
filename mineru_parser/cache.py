@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 
 # 用于缓存的内部函数，基于文件路径和修改时间
 @lru_cache(maxsize=128)
-def _compute_pdf_hash_cached(path_str: str, mtime: float, size: int, chunk_size: int) -> str:
+def _compute_pdf_hash_cached(
+    path_str: str, mtime: float, size: int, chunk_size: int
+) -> str:
     """
     计算 PDF 文件的 SHA256 哈希（带缓存版本）。
 

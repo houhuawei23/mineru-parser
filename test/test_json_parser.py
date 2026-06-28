@@ -35,12 +35,25 @@ def test_find_content_list_json_finds_file() -> None:
 
 def test_extract_text_from_content_list_item() -> None:
     """测试文本提取。"""
-    assert _extract_text_from_content_list_item({"type": "text", "text": " hello "}) == "hello"
-    assert _extract_text_from_content_list_item({"type": "header", "text": "Header"}) == "Header"
+    assert (
+        _extract_text_from_content_list_item({"type": "text", "text": " hello "})
+        == "hello"
+    )
+    assert (
+        _extract_text_from_content_list_item({"type": "header", "text": "Header"})
+        == "Header"
+    )
     # image 类型仅返回图片路径，完整 Markdown 由 _item_to_content_md 组装
-    assert _extract_text_from_content_list_item(
-        {"type": "image", "img_path": "images/abc.jpg", "image_caption": ["Figure 1"]}
-    ) == "images/abc.jpg"
+    assert (
+        _extract_text_from_content_list_item(
+            {
+                "type": "image",
+                "img_path": "images/abc.jpg",
+                "image_caption": ["Figure 1"],
+            }
+        )
+        == "images/abc.jpg"
+    )
 
 
 def test_list_items_to_markdown_bullet() -> None:
@@ -63,9 +76,7 @@ def test_list_items_to_markdown_plain_text() -> None:
 
 def test_list_items_to_markdown_references() -> None:
     """参考文献应按普通段落输出。"""
-    md = _list_items_to_markdown(
-        ["[A] ref one", "[B] ref two"], sub_type="ref_text"
-    )
+    md = _list_items_to_markdown(["[A] ref one", "[B] ref two"], sub_type="ref_text")
     assert md == "[A] ref one  \n[B] ref two"
 
 
@@ -146,8 +157,14 @@ def test_content_list_json_to_markdown_footnote_format() -> None:
 def test_merge_paragraphs_preserves_same_page_spacing() -> None:
     """同一页中的相邻段落不应被合并，应保留段落间距。"""
     blocks = [
-        ContentBlock(page_idx=0, markdown="First paragraph ends here.", is_plain_paragraph=True),
-        ContentBlock(page_idx=0, markdown="Second paragraph starts here.", is_plain_paragraph=True),
+        ContentBlock(
+            page_idx=0, markdown="First paragraph ends here.", is_plain_paragraph=True
+        ),
+        ContentBlock(
+            page_idx=0,
+            markdown="Second paragraph starts here.",
+            is_plain_paragraph=True,
+        ),
     ]
     merged = _merge_paragraphs(blocks, merge_paragraphs=True)
     assert len(merged) == 2
@@ -158,8 +175,14 @@ def test_merge_paragraphs_preserves_same_page_spacing() -> None:
 def test_merge_paragraphs_merges_cross_page_continuation() -> None:
     """跨页且前一段未以句末标点结尾时，应合并为一段。"""
     blocks = [
-        ContentBlock(page_idx=0, markdown="This sentence continues", is_plain_paragraph=True),
-        ContentBlock(page_idx=1, markdown="on the next page without break", is_plain_paragraph=True),
+        ContentBlock(
+            page_idx=0, markdown="This sentence continues", is_plain_paragraph=True
+        ),
+        ContentBlock(
+            page_idx=1,
+            markdown="on the next page without break",
+            is_plain_paragraph=True,
+        ),
     ]
     merged = _merge_paragraphs(blocks, merge_paragraphs=True)
     assert len(merged) == 1
@@ -170,8 +193,16 @@ def test_merge_paragraphs_merges_cross_page_continuation() -> None:
 def test_merge_paragraphs_respects_sentence_end_cross_page() -> None:
     """跨页但前一段以英文句号结尾时，不应合并。"""
     blocks = [
-        ContentBlock(page_idx=0, markdown="This paragraph ends with a period.", is_plain_paragraph=True),
-        ContentBlock(page_idx=1, markdown="Another paragraph starts here.", is_plain_paragraph=True),
+        ContentBlock(
+            page_idx=0,
+            markdown="This paragraph ends with a period.",
+            is_plain_paragraph=True,
+        ),
+        ContentBlock(
+            page_idx=1,
+            markdown="Another paragraph starts here.",
+            is_plain_paragraph=True,
+        ),
     ]
     merged = _merge_paragraphs(blocks, merge_paragraphs=True)
     assert len(merged) == 2
@@ -306,6 +337,28 @@ def test_image_caption_as_body_paragraph() -> None:
             Path(f.name).unlink()
 
 
+def test_chart_caption_as_body_paragraph() -> None:
+    """chart 类型（如 MinerU 识别的图表）应和图片一样输出图片与 caption。"""
+    data = [
+        {
+            "type": "chart",
+            "img_path": "images/chart.jpg",
+            "chart_caption": ["Figure 2: chart caption"],
+            "page_idx": 0,
+        },
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name))
+            assert "![](images/chart.jpg)" in md
+            assert "Figure 2: chart caption" in md
+            assert "![Figure 2: chart caption](images/chart.jpg)" not in md
+        finally:
+            Path(f.name).unlink()
+
+
 def test_plain_text_list_not_bulleted() -> None:
     """普通文本列表不应被强制转为无序列表。"""
     data = [
@@ -417,12 +470,63 @@ def test_content_list_v2_image_caption() -> None:
             Path(f.name).unlink()
 
 
+def test_content_list_v2_chart_caption() -> None:
+    """content_list_v2 chart 类型应和图片一样输出图片与 caption。"""
+    data = [
+        [
+            {
+                "type": "chart",
+                "content": {
+                    "image_source": {"path": "images/chart.jpg"},
+                    "chart_caption": [
+                        {"type": "text", "content": "Figure 2: chart caption"}
+                    ],
+                    "content": "",
+                },
+            }
+        ]
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_v2_to_markdown(Path(f.name))
+            assert "![](images/chart.jpg)" in md
+            assert "Figure 2: chart caption" in md
+            assert "![Figure 2: chart caption](images/chart.jpg)" not in md
+        finally:
+            Path(f.name).unlink()
+
+
+def test_content_list_v2_table() -> None:
+    """content_list_v2 表格应保留 caption 与单元格内容，并转为 Markdown 表格。"""
+    data = [
+        [
+            {
+                "type": "table",
+                "content": {
+                    "html": "<table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>",
+                    "table_caption": [{"type": "text", "content": "Table 1: caption"}],
+                },
+            }
+        ]
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_v2_to_markdown(Path(f.name))
+            assert "Table 1: caption" in md
+            assert "| A | B |" in md
+            assert "| 1 | 2 |" in md
+            assert "<table>" not in md
+        finally:
+            Path(f.name).unlink()
+
+
 def test_convert_html_tables_to_markdown_simple() -> None:
     """简单 HTML 表格应转为 Markdown 表格，默认首行为表头。"""
-    html = (
-        "<table><tr><td>A</td><td>B</td></tr>"
-        "<tr><td>1</td><td>2</td></tr></table>"
-    )
+    html = "<table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>"
     md = convert_html_tables_to_markdown(html)
     assert "<table>" not in md
     assert "| A | B |" in md
@@ -450,10 +554,7 @@ def test_convert_html_tables_to_markdown_escapes_pipe() -> None:
 
 def test_convert_html_tables_to_markdown_colspan() -> None:
     """colspan 应被展开为多个相同内容的单元格。"""
-    html = (
-        "<table><tr><td>A</td><td>B</td></tr>"
-        "<tr><td colspan=\"2\">X</td></tr></table>"
-    )
+    html = '<table><tr><td>A</td><td>B</td></tr><tr><td colspan="2">X</td></tr></table>'
     md = convert_html_tables_to_markdown(html)
     assert "| X | X |" in md
 
@@ -462,7 +563,7 @@ def test_convert_html_tables_to_markdown_rowspan() -> None:
     """rowspan 应被展开到后续行。"""
     html = (
         "<table><tr><td>A</td><td>B</td></tr>"
-        "<tr><td rowspan=\"2\">X</td><td>Y</td></tr>"
+        '<tr><td rowspan="2">X</td><td>Y</td></tr>'
         "<tr><td>Z</td></tr></table>"
     )
     md = convert_html_tables_to_markdown(html)

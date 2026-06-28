@@ -13,7 +13,9 @@ from mineru_parser.cache import (
 )
 
 
-def create_mock_config(cache_hash_chunk_size: int = 8192, cache_key_prefix_len: int = 2):
+def create_mock_config(
+    cache_hash_chunk_size: int = 8192, cache_key_prefix_len: int = 2
+):
     """创建一个模拟的配置对象。"""
     config = Mock()
     config.cache_hash_chunk_size = cache_hash_chunk_size
@@ -149,7 +151,9 @@ class TestSaveToCache:
         config = create_mock_config()
 
         zip_content = b"fake zip content"
-        result = save_to_cache(pdf_path, zip_content, cache_dir, config, model_version="vlm")
+        result = save_to_cache(
+            pdf_path, zip_content, cache_dir, config, model_version="vlm"
+        )
 
         assert result is not None
         assert result.exists()
@@ -175,7 +179,9 @@ class TestSaveToCache:
         config = create_mock_config()
 
         zip_content = b"fake zip content"
-        result = save_to_cache(pdf_path, zip_content, cache_dir, config, model_version="vlm")
+        result = save_to_cache(
+            pdf_path, zip_content, cache_dir, config, model_version="vlm"
+        )
 
         assert result is None
 
@@ -190,12 +196,16 @@ class TestSaveToCache:
         save_to_cache(pdf_path, b"vlm content", cache_dir, config, model_version="vlm")
 
         # Save with pipeline model
-        save_to_cache(pdf_path, b"pipeline content", cache_dir, config, model_version="pipeline")
+        save_to_cache(
+            pdf_path, b"pipeline content", cache_dir, config, model_version="pipeline"
+        )
 
         # Retrieve with vlm
         vlm_result = get_cached_zip(pdf_path, cache_dir, config, model_version="vlm")
         assert vlm_result == b"vlm content"
 
         # Retrieve with pipeline
-        pipeline_result = get_cached_zip(pdf_path, cache_dir, config, model_version="pipeline")
+        pipeline_result = get_cached_zip(
+            pdf_path, cache_dir, config, model_version="pipeline"
+        )
         assert pipeline_result == b"pipeline content"

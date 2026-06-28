@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.5.1 (2026-06-28)
+
+### Fixed
+
+- 修复 MinerU `chart` 类型图表在最终 Markdown 中丢失的问题。
+  - 原因：`content_list.json` / `content_list_v2.json` 将部分图片（如图表、折线图）标记为 `type: "chart"`，但 `json_parser.py` 仅处理 `type: "image"`。
+  - 影响：Figure 2、3、4 等图表无法出现在 `full.md` 中。
+  - 修复：将 `chart` 类型与 `image` 类型同等处理，支持 `chart_caption` 的读取与输出。
+- 修复 `content_list_v2.json` 中 `table` 类型可能丢失的问题。
+  - 原因：v2 表格内容位于 `content.html`，caption 位于 `content.table_caption`，但 `_get_text_from_content_v2` 未读取这些字段。
+  - 修复：在 `_get_text_from_content_v2` 中提取 v2 table 的 HTML 与 caption，并统一转换为 Markdown 表格。
+
+### Tests
+
+- 新增 `test_chart_caption_as_body_paragraph`：验证 v1 `chart` 类型输出图片与 caption。
+- 新增 `test_content_list_v2_chart_caption`：验证 v2 `chart` 类型输出图片与 caption。
+- 新增 `test_content_list_v2_table`：验证 v2 `table` 类型保留 caption 与单元格内容。
+- 完整测试套件：127 个测试全部通过。
+
+### Contributors
+
+- mineru-parser contributors
+- kimi-code（Kimi AI Agent）
+- kimi-k2.7（Kimi 大语言模型）
+
 ## v1.5.0 (2026-06-22)
 
 ### Changed

@@ -112,8 +112,7 @@ def remove_line_number_blocks(markdown: str) -> str:
 def extract_markdown_from_zip(z: zipfile.ZipFile) -> str | None:
     """从已打开的 zip 中提取并合并 markdown 内容。"""
     md_files = [
-        n for n in z.namelist()
-        if n.endswith(".md") and not n.startswith("__MACOSX")
+        n for n in z.namelist() if n.endswith(".md") and not n.startswith("__MACOSX")
     ]
     if not md_files:
         return None
@@ -185,7 +184,9 @@ def build_markdown_from_zip(
         if not markdown:
             md_files = list(temp_extract_dir.rglob("*.md"))
             preferred = next((f for f in md_files if f.name == "full.md"), None)
-            preferred = preferred or next((f for f in md_files if f.name == "merged.md"), None)
+            preferred = preferred or next(
+                (f for f in md_files if f.name == "merged.md"), None
+            )
             preferred = preferred or (md_files[0] if md_files else None)
             if preferred:
                 markdown = preferred.read_text(encoding="utf-8", errors="replace")

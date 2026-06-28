@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
 
+import mineru_parser
 from mineru_parser.cli import app
 
 runner = CliRunner()
@@ -46,7 +47,7 @@ class TestMainCallback:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "mineru-parse" in result.output
-        assert "1.5.0" in result.output
+        assert mineru_parser.__version__ in result.output
 
     def test_help_shows_commands(self) -> None:
         """验证 --help 显示所有命令。"""
@@ -63,7 +64,11 @@ class TestMainCallback:
             assert result.exit_code == 0
             # 验证 setup_logging 被调用且 debug=True
             mock_setup.assert_called_once()
-            call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else mock_setup.call_args[1]
+            call_kwargs = (
+                mock_setup.call_args.kwargs
+                if mock_setup.call_args
+                else mock_setup.call_args[1]
+            )
             assert call_kwargs.get("debug") is True
             assert call_kwargs.get("log_file") is not None
             assert "mineru-parse.log" in str(call_kwargs.get("log_file"))
@@ -75,7 +80,11 @@ class TestMainCallback:
             result = runner.invoke(app, ["--quiet", "parse", "--help"])
             assert result.exit_code == 0
             mock_setup.assert_called_once()
-            call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else mock_setup.call_args[1]
+            call_kwargs = (
+                mock_setup.call_args.kwargs
+                if mock_setup.call_args
+                else mock_setup.call_args[1]
+            )
             assert call_kwargs.get("quiet") is True
             assert call_kwargs.get("log_file") is not None
             assert "mineru-parse.log" in str(call_kwargs.get("log_file"))
@@ -127,7 +136,11 @@ class TestParseCommand:
         with patch.dict("os.environ", {}, clear=True):
             result = runner.invoke(app, ["parse", str(pdf_file)])
             assert result.exit_code == 1
-            assert "Token" in result.output or "token" in result.output or "未配置" in result.output
+            assert (
+                "Token" in result.output
+                or "token" in result.output
+                or "未配置" in result.output
+            )
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
@@ -151,7 +164,9 @@ class TestParseCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_parse_default_output_uses_full_md(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_parse_default_output_uses_full_md(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证默认输出路径为 {stem}_parsed/{stem}/full.md。"""
         pdf_file = tmp_path / "table.pdf"
         pdf_file.write_bytes(b"fake pdf content")
@@ -170,7 +185,9 @@ class TestParseCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_parse_passes_progress_callback(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_parse_passes_progress_callback(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证 parse 命令向 API 调用传入进度回调。"""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
@@ -188,7 +205,9 @@ class TestParseCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_parse_quiet_suppresses_progress(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_parse_quiet_suppresses_progress(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证 --quiet 不输出进度信息，但保留最终结果。"""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
@@ -206,7 +225,9 @@ class TestParseCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_parse_with_pages_option(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_parse_with_pages_option(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证 --pages 选项正确传递。"""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
@@ -216,10 +237,7 @@ class TestParseCommand:
 
         mock_parse.return_value = "# Parsed Content"
 
-        result = runner.invoke(app, [
-            "parse", str(pdf_file),
-            "--pages", "10-20,30-40"
-        ])
+        result = runner.invoke(app, ["parse", str(pdf_file), "--pages", "10-20,30-40"])
 
         assert result.exit_code == 0
         # 验证 pages_spec 被传递
@@ -228,7 +246,9 @@ class TestParseCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_parse_existing_output_warns_without_force(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_parse_existing_output_warns_without_force(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证输出目录已存在且未使用 -f 时发出警告。"""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
@@ -247,7 +267,9 @@ class TestParseCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_parse_force_silences_existing_output_warning(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_parse_force_silences_existing_output_warning(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证 -f/--force 可抑制输出目录已存在警告。"""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"fake pdf content")
@@ -258,7 +280,9 @@ class TestParseCommand:
         mock_load_config.return_value = mock_config
         mock_parse.return_value = "# Parsed Content"
 
-        result = runner.invoke(app, ["parse", str(pdf_file), "-o", str(existing_dir), "-f"])
+        result = runner.invoke(
+            app, ["parse", str(pdf_file), "-o", str(existing_dir), "-f"]
+        )
 
         assert result.exit_code == 0
         assert "输出目录已存在" not in result.output
@@ -292,7 +316,9 @@ class TestFromJsonCommand:
 
     @patch("mineru_parser.cli.regenerate_markdown_from_json")
     @patch("mineru_parser.cli.load_config")
-    def test_from_json_success(self, mock_load_config, mock_regenerate, tmp_path: Path) -> None:
+    def test_from_json_success(
+        self, mock_load_config, mock_regenerate, tmp_path: Path
+    ) -> None:
         """验证成功从 JSON 生成。"""
         input_dir = tmp_path / "parsed"
         input_dir.mkdir()
@@ -340,11 +366,17 @@ class TestBatchCommand:
         with patch.dict("os.environ", {}, clear=True):
             result = runner.invoke(app, ["batch", "-i", str(input_dir)])
             assert result.exit_code == 1
-            assert "Token" in result.output or "token" in result.output or "未配置" in result.output
+            assert (
+                "Token" in result.output
+                or "token" in result.output
+                or "未配置" in result.output
+            )
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_batch_empty_dir_warns(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_batch_empty_dir_warns(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证空目录警告。"""
         input_dir = tmp_path / "empty"
         input_dir.mkdir()
@@ -360,7 +392,9 @@ class TestBatchCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_batch_processes_pdfs(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_batch_processes_pdfs(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证批量处理 PDF 文件。"""
         input_dir = tmp_path / "pdfs"
         input_dir.mkdir()
@@ -383,7 +417,9 @@ class TestBatchCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_batch_with_failures_warns(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_batch_with_failures_warns(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证部分失败时警告。"""
         input_dir = tmp_path / "pdfs"
         input_dir.mkdir()
@@ -405,7 +441,9 @@ class TestBatchCommand:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_batch_recursive(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_batch_recursive(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证递归处理子目录。"""
         input_dir = tmp_path / "pdfs"
         sub_dir = input_dir / "subdir"
@@ -430,7 +468,9 @@ class TestDryRun:
     """测试 --dry-run 功能。"""
 
     @patch("mineru_parser.cli.load_config")
-    def test_batch_dry_run_shows_summary(self, mock_load_config, tmp_path: Path) -> None:
+    def test_batch_dry_run_shows_summary(
+        self, mock_load_config, tmp_path: Path
+    ) -> None:
         """验证 batch --dry-run 显示处理预览。"""
         input_dir = tmp_path / "pdfs"
         input_dir.mkdir()
@@ -476,7 +516,9 @@ class TestResumeCapability:
 
     @patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split")
     @patch("mineru_parser.cli.load_config")
-    def test_resume_skips_completed_files(self, mock_load_config, mock_parse, tmp_path: Path) -> None:
+    def test_resume_skips_completed_files(
+        self, mock_load_config, mock_parse, tmp_path: Path
+    ) -> None:
         """验证 --resume 跳过已完成的文件。"""
         input_dir = tmp_path / "pdfs"
         input_dir.mkdir()
@@ -517,7 +559,9 @@ class TestResumeCapability:
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:
             mock_parse.return_value = "# Parsed"
-            result = runner.invoke(app, ["batch", "-i", str(input_dir), "--reset-failed"])
+            result = runner.invoke(
+                app, ["batch", "-i", str(input_dir), "--reset-failed"]
+            )
             assert result.exit_code == 0
 
 
@@ -541,7 +585,9 @@ class TestConfigHandling:
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:
             mock_parse.return_value = "# Parsed"
-            result = runner.invoke(app, ["-c", str(config_file), "parse", str(pdf_file)])
+            result = runner.invoke(
+                app, ["-c", str(config_file), "parse", str(pdf_file)]
+            )
 
             assert result.exit_code == 0
             mock_load_config.assert_called_with(config_file)
@@ -560,10 +606,9 @@ class TestConfigHandling:
 
         with patch("mineru_parser.cli.parse_pdf_via_api_with_auto_split") as mock_parse:
             mock_parse.return_value = "# Parsed"
-            result = runner.invoke(app, [
-                "parse", str(pdf_file),
-                "-t", "override_token"
-            ])
+            result = runner.invoke(
+                app, ["parse", str(pdf_file), "-t", "override_token"]
+            )
 
             assert result.exit_code == 0
             # Verify the token was overridden in the call

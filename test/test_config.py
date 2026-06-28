@@ -26,5 +26,3 @@ def test_load_config_explicit_missing_raises() -> None:
     """命令行 -c 指向不存在的文件时抛出 ConfigError。"""
     with pytest.raises(ConfigError, match="配置文件不存在"):
         load_config(Path("/nonexistent/user_config.yaml"))
-
-

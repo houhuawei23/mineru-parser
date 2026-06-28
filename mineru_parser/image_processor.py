@@ -9,7 +9,7 @@ from loguru import logger
 from PIL import Image
 
 # Markdown 图片引用正则：![alt](path)
-IMAGE_REF_PATTERN = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+IMAGE_REF_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 # 默认并行工作进程数
 DEFAULT_IMAGE_WORKERS = 4

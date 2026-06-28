@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Optional
 
 
-
 class JobStatus(str, Enum):
     """任务状态枚举。"""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -28,6 +28,7 @@ class JobStatus(str, Enum):
 @dataclass
 class JobRecord:
     """任务记录数据类。"""
+
     file_path: str
     status: JobStatus
     retry_count: int
@@ -90,8 +91,7 @@ class BatchStateManager:
         """
         with self._get_connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM batch_jobs WHERE file_path = ?",
-                (file_path,)
+                "SELECT * FROM batch_jobs WHERE file_path = ?", (file_path,)
             )
             row = cursor.fetchone()
             if row:
@@ -227,7 +227,7 @@ class BatchStateManager:
         with self._get_connection() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM batch_jobs WHERE status = ?",
-                (JobStatus.PENDING.value,)
+                (JobStatus.PENDING.value,),
             )
             return cursor.fetchone()[0]
 

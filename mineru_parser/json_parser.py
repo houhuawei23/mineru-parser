@@ -17,11 +17,11 @@ FOOTNOTE_REF_PATTERN = re.compile(f"[{FOOTNOTE_REFS}]")
 LATEX_FOOTNOTE_REF_PATTERN = re.compile(r"\$\^\{(\d+)\}\$")
 # 句末标点：用于判断段落是否可在跨页时合并
 # 包含中英文句号、问号、感叹号、引号、分号、冒号以及 proof end 符号 □
-SENTENCE_END_CHARS = "。！？；：」\".?!□"
+SENTENCE_END_CHARS = '。！？；：」".?!□'
 # 需要保留的空白字符
 _ALLOWED_WHITESPACE = {"\t", "\n", "\r"}
 # 零宽字符
-_ZERO_WIDTH_CHARS = "\u200B\u200C\u200D\uFEFF\u2060"
+_ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff\u2060"
 # 编号/字母列表项前缀：如 (1)、1.、(a)、A. 等（必须带分隔符）
 _NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*[\(\[]?(\d+|[a-zA-Z])[\)\]\:\.]\s*")
 # VLM/OCR 自我修正伪文本特征
@@ -66,9 +66,7 @@ def sanitize_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
     # 保留可见字符与允许的空白，移除 C0 控制字符
-    cleaned = "".join(
-        c for c in text if ord(c) >= 32 or c in _ALLOWED_WHITESPACE
-    )
+    cleaned = "".join(c for c in text if ord(c) >= 32 or c in _ALLOWED_WHITESPACE)
     # 移除 DEL (U+007F) 与 C1 控制字符 (U+0080-U+009F)
     cleaned = "".join(c for c in cleaned if not 0x7F <= ord(c) <= 0x9F)
     # 移除零宽字符
@@ -241,9 +239,7 @@ def _format_markdown_table(grid: list[list[str]], header_rows: int) -> str:
             "| " + " | ".join(_escape_markdown_table_cell(c) for c in grid[i]) + " |"
         )
     if header_rows > 0 and len(grid) > header_rows:
-        lines.append(
-            "| " + " | ".join("---" for _ in grid[0]) + " |"
-        )
+        lines.append("| " + " | ".join("---" for _ in grid[0]) + " |")
     for i in range(header_rows, len(grid)):
         lines.append(
             "| " + " | ".join(_escape_markdown_table_cell(c) for c in grid[i]) + " |"
@@ -281,6 +277,7 @@ def convert_html_tables_to_markdown(text: str) -> str:
 @dataclass
 class PageMeta:
     """页面元信息。"""
+
     headers: list[str] = field(default_factory=list)
     footers: list[str] = field(default_factory=list)
     page_num: str | None = None
@@ -289,6 +286,7 @@ class PageMeta:
 @dataclass
 class ContentBlock:
     """统一的内容块表示。"""
+
     page_idx: int
     markdown: str
     is_plain_paragraph: bool
@@ -298,6 +296,7 @@ class ContentBlock:
 @dataclass
 class ParsedPage:
     """解析后的页面数据。"""
+
     content_blocks: list[ContentBlock] = field(default_factory=list)
     footnotes: list[str] = field(default_factory=list)
     meta: PageMeta = field(default_factory=PageMeta)
@@ -320,7 +319,16 @@ def find_content_list_json(extract_dir: Path) -> Path | None:
 def _extract_text_from_content_list_item(item: dict) -> str:
     """从 content_list 单项中提取并清理文本内容。"""
     t = item.get("type", "")
-    if t in ("text", "header", "footer", "page_number", "page_footnote", "aside_text", "title", "ref_text"):
+    if t in (
+        "text",
+        "header",
+        "footer",
+        "page_number",
+        "page_footnote",
+        "aside_text",
+        "title",
+        "ref_text",
+    ):
         text = sanitize_text((item.get("text") or "").strip())
         return "" if _is_vlm_pseudo_text(text) else text
     if t == "list":
@@ -339,7 +347,7 @@ def _extract_text_from_content_list_item(item: dict) -> str:
         if cap_text:
             return f"{cap_text}\n\n{body}"
         return body
-    if t == "image":
+    if t in ("image", "chart"):
         # 返回图片路径即可，完整 Markdown 在 _item_to_content_md 中组装
         return sanitize_text(item.get("img_path", ""))
     if t == "equation":
@@ -348,9 +356,9 @@ def _extract_text_from_content_list_item(item: dict) -> str:
 
 
 def _build_image_markdown(item: dict) -> str:
-    """为 image 类型构建 Markdown：图片 + mermaid + caption（多行 caption 用硬换行连接）。"""
+    """为 image / chart 类型构建 Markdown：图片 + mermaid + caption（多行 caption 用硬换行连接）。"""
     img_path = sanitize_text(item.get("img_path", ""))
-    captions = item.get("image_caption", [])
+    captions = item.get("image_caption", []) or item.get("chart_caption", [])
     cap_lines = [sanitize_text(c.strip()) for c in captions if c.strip()]
     mermaid = sanitize_text((item.get("content") or "").strip())
     parts: list[str] = []
@@ -374,7 +382,7 @@ def _item_to_content_md(item: dict, text: str) -> str:
     if t == "title":
         level = item.get("text_level", 1)
         return f"{'#' * min(level, 6)} {text}"
-    if t == "image":
+    if t in ("image", "chart"):
         return _build_image_markdown(item)
     if t in ("list", "table", "code"):
         return text
@@ -406,6 +414,7 @@ def _ends_with_sentence_end(text: str) -> bool:
 
 def _sort_items_by_reading_order(items: list[dict]) -> list[dict]:
     """按 (page_idx, column, -bbox[1]) 排序：先左栏后右栏，栏内从上到下。"""
+
     def key_fn(x: dict) -> tuple[int, int, float]:
         page = x.get("page_idx", 0)
         bbox = x.get("bbox") or [0, 0, 0, 0]
@@ -414,6 +423,7 @@ def _sort_items_by_reading_order(items: list[dict]) -> list[dict]:
         # 分栏：x < 500 为左栏，否则右栏
         column = 0 if x_center < 500 else 1
         return (page, column, -float(y_val))
+
     return sorted(items, key=key_fn)
 
 
@@ -422,8 +432,8 @@ def _detect_language(text: str) -> str:
     if not text:
         return "zh"
     # 统计中文字符数量
-    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-    total_chars = len(re.findall(r'[\w]', text))
+    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    total_chars = len(re.findall(r"[\w]", text))
     if total_chars == 0:
         return "zh"
     # 中文字符占比超过 10% 视为中文内容
@@ -497,12 +507,14 @@ def _merge_paragraphs(
             merged_page = next_block.page_idx
             j += 1
 
-        merged.append(ContentBlock(
-            page_idx=current.page_idx,
-            markdown=merged_md,
-            is_plain_paragraph=True,
-            footnote_pairs=merged_fn_pairs,
-        ))
+        merged.append(
+            ContentBlock(
+                page_idx=current.page_idx,
+                markdown=merged_md,
+                is_plain_paragraph=True,
+                footnote_pairs=merged_fn_pairs,
+            )
+        )
         i = j
 
     return merged
@@ -549,16 +561,29 @@ def _generate_markdown_output(
                 fn_text = " ".join(fn_lines)
                 lang = _detect_language(fn_text)
                 if lang == "zh":
-                    all_parts.append("<!-- 脚注 -->\n\n" + "\n".join(fn_lines) + "\n\n<!-- 脚注结束 -->")
+                    all_parts.append(
+                        "<!-- 脚注 -->\n\n"
+                        + "\n".join(fn_lines)
+                        + "\n\n<!-- 脚注结束 -->"
+                    )
                 else:
-                    all_parts.append("<!-- footnote -->\n\n" + "\n".join(fn_lines) + "\n\n<!-- footnote end -->")
+                    all_parts.append(
+                        "<!-- footnote -->\n\n"
+                        + "\n".join(fn_lines)
+                        + "\n\n<!-- footnote end -->"
+                    )
 
         # 输出页脚：仅对已完成的页输出页脚
-        next_page = merged_blocks[i + 1].page_idx if i + 1 < len(merged_blocks) else page_idx + 1
-        last_completed = min(
-            max(block.page_idx, page_idx),
-            next_page - 1
-        ) if next_page > page_idx else page_idx
+        next_page = (
+            merged_blocks[i + 1].page_idx
+            if i + 1 < len(merged_blocks)
+            else page_idx + 1
+        )
+        last_completed = (
+            min(max(block.page_idx, page_idx), next_page - 1)
+            if next_page > page_idx
+            else page_idx
+        )
 
         for p in range(page_idx, last_completed + 1):
             meta = pages_meta.get(p, PageMeta())
@@ -578,9 +603,17 @@ def _generate_markdown_output(
                     fn_text = " ".join(notes)
                     lang = _detect_language(fn_text)
                     if lang == "zh":
-                        trailing_notes.append("<!-- 脚注 -->\n\n" + "\n".join(notes) + "\n\n<!-- 脚注结束 -->")
+                        trailing_notes.append(
+                            "<!-- 脚注 -->\n\n"
+                            + "\n".join(notes)
+                            + "\n\n<!-- 脚注结束 -->"
+                        )
                     else:
-                        trailing_notes.append("<!-- footnote -->\n\n" + "\n".join(notes) + "\n\n<!-- footnote end -->")
+                        trailing_notes.append(
+                            "<!-- footnote -->\n\n"
+                            + "\n".join(notes)
+                            + "\n\n<!-- footnote end -->"
+                        )
             if trailing_notes:
                 all_parts.extend(trailing_notes)
 
@@ -629,7 +662,7 @@ def content_list_json_to_markdown(
         elif t == "page_footnote" and text:
             page.footnotes.append(_format_footnote(text) if include_footnote else "")
         elif t not in ("header", "footer", "page_number", "page_footnote"):
-            if text or t in ("image", "table", "code"):
+            if text or t in ("image", "chart", "table", "code"):
                 md = _item_to_content_md(item, text)
                 if md:
                     is_plain = _is_plain_paragraph(item)
@@ -652,12 +685,14 @@ def content_list_json_to_markdown(
                     pairs.append((page_idx, fn_idx))
                     fn_idx += 1
 
-            flat_blocks.append(ContentBlock(
-                page_idx=page_idx,
-                markdown=md,
-                is_plain_paragraph=is_plain,
-                footnote_pairs=pairs,
-            ))
+            flat_blocks.append(
+                ContentBlock(
+                    page_idx=page_idx,
+                    markdown=md,
+                    is_plain_paragraph=is_plain,
+                    footnote_pairs=pairs,
+                )
+            )
 
     # 提取元信息和脚注字典用于输出
     pages_meta = {p: data.meta for p, data in pages_data.items()}
@@ -679,15 +714,20 @@ def content_list_json_to_markdown(
 
 
 def _build_image_markdown_v2(item: dict) -> str:
-    """为 content_list_v2 的 image 类型构建 Markdown。"""
+    """为 content_list_v2 的 image / chart 类型构建 Markdown。"""
     content = item.get("content", {}) if isinstance(item, dict) else {}
     if not isinstance(content, dict):
         content = {}
     img_source = content.get("image_source", {})
-    img_path = sanitize_text(img_source.get("path", "")) if isinstance(img_source, dict) else ""
+    img_path = (
+        sanitize_text(img_source.get("path", ""))
+        if isinstance(img_source, dict)
+        else ""
+    )
     mermaid = sanitize_text((content.get("content") or "").strip())
     cap_lines: list[str] = []
-    for cap in content.get("image_caption", []):
+    captions = content.get("image_caption", []) or content.get("chart_caption", [])
+    for cap in captions:
         if isinstance(cap, dict):
             line = sanitize_text(cap.get("content", "").strip())
         else:
@@ -709,7 +749,14 @@ def _get_text_from_content_v2(content: dict) -> str:
     if not content:
         return ""
     parts: list[str] = []
-    for key in ["paragraph_content", "title_content", "page_number_content", "page_footnote_content", "code_caption", "code_content"]:
+    for key in [
+        "paragraph_content",
+        "title_content",
+        "page_number_content",
+        "page_footnote_content",
+        "code_caption",
+        "code_content",
+    ]:
         if key in content and isinstance(content[key], list):
             for c in content[key]:
                 if isinstance(c, dict):
@@ -724,6 +771,25 @@ def _get_text_from_content_v2(content: dict) -> str:
                         text = sanitize_text(c.get("content", ""))
                         if not _is_vlm_pseudo_text(text):
                             parts.append(text)
+    # table 类型：html + caption
+    if "html" in content and isinstance(content["html"], str):
+        body = sanitize_text(content["html"])
+        cap_parts: list[str] = []
+        for cap in content.get("table_caption", []):
+            if isinstance(cap, dict):
+                ct = cap.get("type", "")
+                text = sanitize_text(cap.get("content", ""))
+                if text and not _is_vlm_pseudo_text(text):
+                    cap_parts.append(text)
+            elif isinstance(cap, str):
+                text = sanitize_text(cap)
+                if text and not _is_vlm_pseudo_text(text):
+                    cap_parts.append(text)
+        cap_text = " ".join(cap_parts).strip()
+        table_md = f"**{cap_text}**\n\n{body}" if cap_text else body
+        if parts:
+            return "\n\n".join([" ".join(parts).strip(), table_md])
+        return table_md
     return " ".join(parts).strip()
 
 
@@ -784,7 +850,9 @@ def _convert_v2_to_content_blocks(
         for item in page_items:
             t = item.get("type", "")
             content = item.get("content", {})
-            text = _get_text_from_content_v2(content) if isinstance(content, dict) else ""
+            text = (
+                _get_text_from_content_v2(content) if isinstance(content, dict) else ""
+            )
 
             if t == "header" and text:
                 pages_meta[page_idx].headers.append(text)
@@ -793,7 +861,9 @@ def _convert_v2_to_content_blocks(
             elif t == "page_number":
                 pages_meta[page_idx].page_num = text.strip() or str(page_idx + 1)
             elif t == "page_footnote" and text:
-                pages_footnotes[page_idx].append(_format_footnote(text) if include_footnote else "")
+                pages_footnotes[page_idx].append(
+                    _format_footnote(text) if include_footnote else ""
+                )
             elif t == "title":
                 level = content.get("level", 1)
                 md = f"{'#' * min(level, 6)} {text}"
@@ -801,7 +871,9 @@ def _convert_v2_to_content_blocks(
             elif t == "paragraph":
                 page_blocks.append((text, item, True))
             elif t == "list":
-                list_type = content.get("list_type", "") if isinstance(content, dict) else ""
+                list_type = (
+                    content.get("list_type", "") if isinstance(content, dict) else ""
+                )
                 item_texts: list[str] = []
                 for li in content.get("list_items", []):
                     ic = li.get("item_content", []) if isinstance(li, dict) else []
@@ -817,7 +889,11 @@ def _convert_v2_to_content_blocks(
             elif t == "code":
                 caption = _get_code_caption_from_content_v2(content)
                 code_body = _get_code_content_from_content_v2(content)
-                lang = content.get("code_language", "") if isinstance(content, dict) else ""
+                lang = (
+                    content.get("code_language", "")
+                    if isinstance(content, dict)
+                    else ""
+                )
                 md_parts: list[str] = []
                 if caption:
                     md_parts.append(caption)
@@ -826,14 +902,16 @@ def _convert_v2_to_content_blocks(
                 if md_parts:
                     page_blocks.append(("\n\n".join(md_parts), item, False))
             elif t == "equation_interline":
-                math = content.get("math_content", "") if isinstance(content, dict) else ""
+                math = (
+                    content.get("math_content", "") if isinstance(content, dict) else ""
+                )
                 math = sanitize_text(math).strip()
                 if math:
                     if math.startswith("$$") and math.endswith("$$"):
                         page_blocks.append((math, item, False))
                     else:
                         page_blocks.append((f"$${math}$$", item, False))
-            elif t == "image":
+            elif t in ("image", "chart"):
                 img_md = _build_image_markdown_v2(item)
                 if img_md:
                     page_blocks.append((img_md, item, False))
@@ -852,12 +930,14 @@ def _convert_v2_to_content_blocks(
                     pairs.append((page_idx, fn_idx))
                     fn_idx += 1
 
-            pages_content[page_idx].append(ContentBlock(
-                page_idx=page_idx,
-                markdown=md,
-                is_plain_paragraph=is_plain,
-                footnote_pairs=pairs,
-            ))
+            pages_content[page_idx].append(
+                ContentBlock(
+                    page_idx=page_idx,
+                    markdown=md,
+                    is_plain_paragraph=is_plain,
+                    footnote_pairs=pairs,
+                )
+            )
 
     return pages_content, pages_meta, pages_footnotes
 

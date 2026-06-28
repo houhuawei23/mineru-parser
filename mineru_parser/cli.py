@@ -13,7 +13,11 @@ from loguru import logger
 from tqdm import tqdm
 
 from mineru_parser import __version__
-from mineru_parser.api import parse_pdf_via_api_with_auto_split, parse_pdfs_concurrent, reset_api_semaphore
+from mineru_parser.api import (
+    parse_pdf_via_api_with_auto_split,
+    parse_pdfs_concurrent,
+    reset_api_semaphore,
+)
 from mineru_parser.config import ConfigError, load_config
 from mineru_parser.markdown import regenerate_markdown_from_json
 from mineru_parser.pdf_splitter import get_pdf_info
@@ -58,40 +62,57 @@ def version_callback(value: bool) -> None:
 def main_callback(
     ctx: typer.Context,
     version: bool = typer.Option(
-        False, "-v", "--version", callback=version_callback, is_eager=True,
+        False,
+        "-v",
+        "--version",
+        callback=version_callback,
+        is_eager=True,
         help="显示版本信息",
     ),
     config_path: Path | None = typer.Option(
-        None, "-c", "--config", path_type=Path,
+        None,
+        "-c",
+        "--config",
+        path_type=Path,
         help="用户配置文件（YAML）；也可写在子命令后，如 parse file -c config.yml。"
         " 优先级：本参数/子命令 -c > 环境变量 > 当前目录 config.yml > 包内 default",
     ),
     force: bool = typer.Option(
-        False, "-f", "--force",
+        False,
+        "-f",
+        "--force",
         help="强制覆盖已存在的输出文件",
     ),
     no_cache: bool = typer.Option(
-        False, "--no-cache",
+        False,
+        "--no-cache",
         help="禁用缓存，强制重新调用 API 解析",
     ),
     no_merge_paragraphs: bool = typer.Option(
-        False, "--no-merge-paragraphs",
+        False,
+        "--no-merge-paragraphs",
         help="禁用跨页段落合并",
     ),
     no_inline_footnotes: bool = typer.Option(
-        False, "--no-inline-footnotes",
+        False,
+        "--no-inline-footnotes",
         help="脚注放在页末而非段落后",
     ),
     quiet: bool = typer.Option(
-        False, "-q", "--quiet",
+        False,
+        "-q",
+        "--quiet",
         help="静默模式，减少输出",
     ),
     debug: bool = typer.Option(
-        False, "-d", "--debug",
+        False,
+        "-d",
+        "--debug",
         help="调试模式，输出详细日志",
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run",
+        False,
+        "--dry-run",
         help="模拟运行，不实际调用 API，仅显示将要处理的内容",
     ),
 ) -> None:
@@ -140,8 +161,10 @@ def _get_md_options(ctx: typer.Context) -> dict:
         "include_footer": cfg.markdown.include_footer,
         "include_page_number": cfg.markdown.include_page_number,
         "include_footnote": cfg.markdown.include_footnote,
-        "merge_paragraphs": cfg.markdown.merge_paragraphs and not ctx.obj.get("no_merge_paragraphs", False),
-        "inline_footnotes": cfg.markdown.inline_footnotes and not ctx.obj.get("no_inline_footnotes", False),
+        "merge_paragraphs": cfg.markdown.merge_paragraphs
+        and not ctx.obj.get("no_merge_paragraphs", False),
+        "inline_footnotes": cfg.markdown.inline_footnotes
+        and not ctx.obj.get("no_inline_footnotes", False),
     }
 
 
@@ -154,15 +177,22 @@ def parse_cmd(
         help="PDF 文件路径或 arXiv 链接",
     ),
     output: Path | None = typer.Option(
-        None, "-o", "--output", path_type=Path,
+        None,
+        "-o",
+        "--output",
+        path_type=Path,
         help="输出目录或 Markdown 路径（默认：{stem}/full.md）",
     ),
     token: str | None = typer.Option(
-        None, "-t", "--token",
+        None,
+        "-t",
+        "--token",
         help="MinerU API Token（覆盖配置文件）",
     ),
     model: str | None = typer.Option(
-        None, "-m", "--model",
+        None,
+        "-m",
+        "--model",
         help="解析模型：vlm（默认，可能切分大图）或 pipeline（不切分大图）",
     ),
     header: bool = typer.Option(False, "--header", help="添加页眉"),
@@ -254,7 +284,9 @@ def parse_cmd(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model_version = model or cfg.model_version
-    chunk_pages = target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
+    chunk_pages = (
+        target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
+    )
 
     quiet = ctx.obj.get("quiet", False)
     reporter = ProgressReporter(desc=f"解析 {pdf_path.name}", quiet=quiet)
@@ -303,7 +335,10 @@ def from_json_cmd(
         help="已解析目录（含 *_content_list.json）",
     ),
     output: Path | None = typer.Option(
-        None, "-o", "--output", path_type=Path,
+        None,
+        "-o",
+        "--output",
+        path_type=Path,
         help="输出 Markdown 路径",
     ),
     header: bool = typer.Option(False, "--header", help="添加页眉"),
@@ -350,31 +385,47 @@ def from_json_cmd(
 def batch_cmd(
     ctx: typer.Context,
     input_path: Path = typer.Option(
-        ..., "-i", "--input", path_type=Path,
+        ...,
+        "-i",
+        "--input",
+        path_type=Path,
         help="输入 PDF 文件或目录",
     ),
     output_dir: Path | None = typer.Option(
-        None, "-o", "--output", path_type=Path,
+        None,
+        "-o",
+        "--output",
+        path_type=Path,
         help="输出目录（默认与输入同目录）",
     ),
     recursive: bool = typer.Option(
-        False, "-r", "--recursive",
+        False,
+        "-r",
+        "--recursive",
         help="递归处理子目录",
     ),
     include: str = typer.Option(
-        None, "-I", "--include",
+        None,
+        "-I",
+        "--include",
         help="包含的文件模式（默认从 default_config.yml 读取）",
     ),
     exclude: str = typer.Option(
-        None, "-E", "--exclude",
+        None,
+        "-E",
+        "--exclude",
         help="排除的文件模式（正则，默认从 default_config.yml 读取）",
     ),
     token: str | None = typer.Option(
-        None, "-t", "--token",
+        None,
+        "-t",
+        "--token",
         help="MinerU API Token",
     ),
     model: str | None = typer.Option(
-        None, "-m", "--model",
+        None,
+        "-m",
+        "--model",
         help="解析模型：vlm 或 pipeline（不切分大图）",
     ),
     config_path: Path | None = typer.Option(
@@ -461,7 +512,9 @@ def batch_cmd(
     # Initialize state manager for resume capability
     state_file = get_state_file(input_path, out_base)
     batch_conc = concurrency if concurrency is not None else cfg.batch_concurrency
-    chunk_pages = target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
+    chunk_pages = (
+        target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
+    )
 
     with BatchStateManager(state_file) as state:
         if reset_failed:
@@ -543,30 +596,35 @@ def batch_cmd(
                     out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
                     out_dir.mkdir(parents=True, exist_ok=True)
                     task_paths.append(pdf_path)
-                    pdf_tasks.append({
-                        "pdf_path": pdf_path,
-                        "token": tok,
-                        "output_dir": out_dir,
-                        "config": cfg,
-                        "target_chunk_pages": chunk_pages,
-                        "api_rate_limit": cfg.api_rate_limit,
-                        "base_url": cfg.base_url,
-                        "model_version": model_version,
-                        "poll_interval": cfg.poll_interval,
-                        "max_wait": cfg.max_wait,
-                        "cache_enabled": cfg.cache_enabled,
-                        "cache_dir": cfg.cache_dir,
-                        "use_cache": not ctx.obj["no_cache"],
-                        **md_opts,
-                    })
+                    pdf_tasks.append(
+                        {
+                            "pdf_path": pdf_path,
+                            "token": tok,
+                            "output_dir": out_dir,
+                            "config": cfg,
+                            "target_chunk_pages": chunk_pages,
+                            "api_rate_limit": cfg.api_rate_limit,
+                            "base_url": cfg.base_url,
+                            "model_version": model_version,
+                            "poll_interval": cfg.poll_interval,
+                            "max_wait": cfg.max_wait,
+                            "cache_enabled": cfg.cache_enabled,
+                            "cache_dir": cfg.cache_dir,
+                            "use_cache": not ctx.obj["no_cache"],
+                            **md_opts,
+                        }
+                    )
 
             if not pdf_tasks:
                 typer.echo("没有需要处理的文件")
                 raise typer.Exit(0)
 
-            typer.echo(f"并发模式: {batch_conc} 个文件同时处理, API 并发限制 {cfg.api_rate_limit}")
+            typer.echo(
+                f"并发模式: {batch_conc} 个文件同时处理, API 并发限制 {cfg.api_rate_limit}"
+            )
 
             with tqdm(total=len(pdf_tasks), desc="解析 PDF") as pbar:
+
                 def on_file_complete(idx, result):
                     pbar.update(1)
                     status = "OK" if result["success"] else "FAIL"

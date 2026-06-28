@@ -42,8 +42,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="使用 MinerU API 解析 PDF 并输出 Markdown。支持本地 PDF 或 arXiv 链接"
     )
-    parser.add_argument("pdf_or_url", nargs="?", help="PDF 路径、arXiv 链接，或已解析目录（配合 --from-json）")
-    parser.add_argument("--from-json", action="store_true", help="从已解压目录的 JSON 重新生成 Markdown")
+    parser.add_argument(
+        "pdf_or_url",
+        nargs="?",
+        help="PDF 路径、arXiv 链接，或已解析目录（配合 --from-json）",
+    )
+    parser.add_argument(
+        "--from-json", action="store_true", help="从已解压目录的 JSON 重新生成 Markdown"
+    )
     parser.add_argument("-o", "--output", help="输出目录或 Markdown 路径")
     parser.add_argument("-t", "--token", default="", help="MinerU API Token")
     parser.add_argument("-c", "--config", type=Path, help="配置文件路径")
@@ -54,9 +60,15 @@ def main() -> None:
     parser.add_argument("--footer", action="store_true")
     parser.add_argument("--page-number", action="store_true")
     parser.add_argument("--no-footnote", action="store_true")
-    parser.add_argument("--no-cache", action="store_true", help="禁用缓存，强制重新调用 API 解析")
-    parser.add_argument("--no-merge-paragraphs", action="store_true", help="禁用跨页段落合并")
-    parser.add_argument("--no-inline-footnotes", action="store_true", help="脚注放在页末而非段落后")
+    parser.add_argument(
+        "--no-cache", action="store_true", help="禁用缓存，强制重新调用 API 解析"
+    )
+    parser.add_argument(
+        "--no-merge-paragraphs", action="store_true", help="禁用跨页段落合并"
+    )
+    parser.add_argument(
+        "--no-inline-footnotes", action="store_true", help="脚注放在页末而非段落后"
+    )
     args = parser.parse_args()
 
     try:
@@ -79,7 +91,9 @@ def main() -> None:
         if not parsed_dir.is_dir():
             print(f"目录不存在: {parsed_dir}")
             sys.exit(1)
-        output_md = Path(args.output) if args.output and args.output.endswith(".md") else None
+        output_md = (
+            Path(args.output) if args.output and args.output.endswith(".md") else None
+        )
         if regenerate_markdown_from_json(
             parsed_dir,
             output_md,
@@ -87,8 +101,10 @@ def main() -> None:
             include_footer=args.footer or cfg.markdown.include_footer,
             include_page_number=args.page_number or cfg.markdown.include_page_number,
             include_footnote=not args.no_footnote and cfg.markdown.include_footnote,
-            merge_paragraphs=cfg.markdown.merge_paragraphs and not args.no_merge_paragraphs,
-            inline_footnotes=cfg.markdown.inline_footnotes and not args.no_inline_footnotes,
+            merge_paragraphs=cfg.markdown.merge_paragraphs
+            and not args.no_merge_paragraphs,
+            inline_footnotes=cfg.markdown.inline_footnotes
+            and not args.no_inline_footnotes,
         ):
             print("重新生成成功")
         else:
@@ -101,7 +117,10 @@ def main() -> None:
 
     input_arg = args.pdf_or_url
     if not input_arg:
-        default = Path(__file__).parent / "2021-ICLR-ALFWorld-Aligning-Text-and-Embodied-Environments-for-Interactive-Learning-2010.03768v2.pdf"
+        default = (
+            Path(__file__).parent
+            / "2021-ICLR-ALFWorld-Aligning-Text-and-Embodied-Environments-for-Interactive-Learning-2010.03768v2.pdf"
+        )
         input_arg = str(default) if default.exists() else ""
 
     if not input_arg:
@@ -132,8 +151,10 @@ def main() -> None:
         "include_footer": args.footer or cfg.markdown.include_footer,
         "include_page_number": args.page_number or cfg.markdown.include_page_number,
         "include_footnote": not args.no_footnote and cfg.markdown.include_footnote,
-        "merge_paragraphs": cfg.markdown.merge_paragraphs and not args.no_merge_paragraphs,
-        "inline_footnotes": cfg.markdown.inline_footnotes and not args.no_inline_footnotes,
+        "merge_paragraphs": cfg.markdown.merge_paragraphs
+        and not args.no_merge_paragraphs,
+        "inline_footnotes": cfg.markdown.inline_footnotes
+        and not args.no_inline_footnotes,
     }
 
     markdown = parse_pdf_via_api_with_auto_split(

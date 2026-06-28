@@ -6,7 +6,9 @@ from mineru_parser.progress import ProgressReporter, make_progress_callback
 def test_progress_reporter_quiet_no_output(capsys) -> None:
     """静默模式下不应产生终端输出。"""
     reporter = ProgressReporter(desc="test", quiet=True)
-    reporter.update("start", {"pdf_path": "/tmp/a.pdf", "num_pages": 10, "size_mb": 1.5})
+    reporter.update(
+        "start", {"pdf_path": "/tmp/a.pdf", "num_pages": 10, "size_mb": 1.5}
+    )
     reporter.update("complete", {"markdown_length": 100})
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -16,7 +18,9 @@ def test_progress_reporter_quiet_no_output(capsys) -> None:
 def test_progress_reporter_start_output(capsys) -> None:
     """start 阶段应输出解析文件信息。"""
     reporter = ProgressReporter(desc="test", quiet=False)
-    reporter.update("start", {"pdf_path": "/tmp/a.pdf", "num_pages": 10, "size_mb": 1.5})
+    reporter.update(
+        "start", {"pdf_path": "/tmp/a.pdf", "num_pages": 10, "size_mb": 1.5}
+    )
     reporter.close()
     captured = capsys.readouterr()
     assert "开始解析" in captured.out

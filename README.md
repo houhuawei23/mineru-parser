@@ -299,6 +299,27 @@ pytest --cov=mineru_parser --cov-report=html
 
 ## 版本历史
 
+### v1.5.1 (2026-06-28)
+
+- **修复**：MinerU `chart` 类型图表在最终 Markdown 中丢失的问题
+  - 原因：`content_list.json` / `content_list_v2.json` 将部分图片（如图表、折线图）标记为 `type: "chart"`，但 `json_parser.py` 仅处理 `type: "image"`
+  - 修复：将 `chart` 类型与 `image` 类型同等处理，支持 `chart_caption` 的读取与输出
+- **修复**：`content_list_v2.json` 中 `table` 类型可能丢失的问题
+  - 原因：v2 表格内容位于 `content.html`，caption 位于 `content.table_caption`，但 `_get_text_from_content_v2` 未读取这些字段
+  - 修复：在 `_get_text_from_content_v2` 中提取 v2 table 的 HTML 与 caption，并统一转换为 Markdown 表格
+- **工程化**：更新 `.githooks/pre-commit`，提交前自动使用 `ruff format` 格式化 Python、`prettier --write` 格式化 YAML
+- **整理**：全仓库 Python 文件执行 `ruff format`，YAML 文件执行 `prettier --write`
+- **文档**：更新 CHANGELOG、README、版本号
+- **署名**：本版本由 kimi-code（kimi-k2.7）共同开发
+- 测试：127 个测试全部通过
+
+### v1.5.0 (2026-06-22)
+
+- **变更**：`mineru-parse parse` 命令默认输出路径调整为 `{stem}/full.md`
+- **文档**：更新 CHANGELOG、README、版本号
+- **署名**：本版本由 kimi-code（kimi-k2.7）共同开发
+- 测试：124 个测试全部通过
+
 ### v1.4.0 (2026-06-22)
 
 - **新增**：自动将 MinerU 输出的 HTML `<table>` 转换为标准 Markdown 表格格式

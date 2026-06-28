@@ -40,7 +40,9 @@ class ProgressReporter:
                 leave=False,
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
             )
-        elif total is not None and (self.pbar.total is None or self.pbar.total != total):
+        elif total is not None and (
+            self.pbar.total is None or self.pbar.total != total
+        ):
             self.pbar.total = total
         return self.pbar
 
@@ -55,9 +57,7 @@ class ProgressReporter:
             name = Path(pdf).name if pdf else "输入"
             num_pages = info.get("num_pages") or "?"
             size_mb = info.get("size_mb", 0.0)
-            typer.echo(
-                f"开始解析: {name} ({num_pages} 页, {size_mb:.1f} MB)"
-            )
+            typer.echo(f"开始解析: {name} ({num_pages} 页, {size_mb:.1f} MB)")
 
         elif phase == "cache_hit":
             typer.echo("命中缓存，跳过 API 调用")
@@ -129,6 +129,8 @@ class ProgressReporter:
             self.pbar = None
 
 
-def make_progress_callback(reporter: ProgressReporter) -> Callable[[str, dict[str, Any] | None], None]:
+def make_progress_callback(
+    reporter: ProgressReporter,
+) -> Callable[[str, dict[str, Any] | None], None]:
     """生成兼容 API 进度回调的闭包。"""
     return lambda phase, info=None: reporter.update(phase, info or {})

@@ -89,8 +89,7 @@ def load_config(config_path: Path | None = None) -> "Config":
             data: dict[str, Any] = yaml.safe_load(f)
     except yaml.YAMLError as e:
         raise ConfigError(
-            f"default_config.yml 解析失败: {e}\n"
-            f"请检查 YAML 语法是否正确。"
+            f"default_config.yml 解析失败: {e}\n请检查 YAML 语法是否正确。"
         ) from e
     except OSError as e:
         raise ConfigError(f"读取 default_config.yml 失败: {e}") from e
@@ -148,8 +147,7 @@ def _validate_and_resolve(data: dict) -> dict:
         val = _get_nested(data, path)
         if val is None:
             raise ConfigError(
-                f"配置项缺失: {path}\n"
-                f"请在 default_config.yml 中补全该配置。"
+                f"配置项缺失: {path}\n请在 default_config.yml 中补全该配置。"
             )
 
     # 解析 cache.dir 中的 ~
