@@ -1,9 +1,10 @@
 """图片后处理模块：提取引用、重命名、转 PNG、更新 Markdown 格式。"""
 
+from __future__ import annotations
+
 import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Tuple
 
 from loguru import logger
 from PIL import Image
@@ -15,7 +16,7 @@ IMAGE_REF_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 DEFAULT_IMAGE_WORKERS = 4
 
 
-def _convert_single_image(args: Tuple[Path, Path, str, str]) -> Tuple[str, bool]:
+def _convert_single_image(args: tuple[Path, Path, str, str]) -> tuple[str, bool]:
     """
     转换单个图片为 PNG（用于进程池）。
 

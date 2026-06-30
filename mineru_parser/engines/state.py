@@ -7,13 +7,14 @@
 - 处理历史记录
 """
 
+from __future__ import annotations
+
 import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class JobStatus(str, Enum):
@@ -34,7 +35,7 @@ class JobRecord:
     retry_count: int
     created_at: str
     updated_at: str
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 class BatchStateManager:
@@ -82,7 +83,7 @@ class BatchStateManager:
             """)
             conn.commit()
 
-    def get_job(self, file_path: str) -> Optional[JobRecord]:
+    def get_job(self, file_path: str) -> JobRecord | None:
         """
         获取任务记录。
 
@@ -127,7 +128,7 @@ class BatchStateManager:
         self,
         file_path: str,
         status: JobStatus,
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
     ) -> None:
         """
         更新任务状态。

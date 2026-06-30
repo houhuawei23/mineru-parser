@@ -5,15 +5,14 @@ from unittest.mock import Mock
 
 import requests
 
-from mineru_parser.api import (
+from mineru_parser.core.api_client import (
     apply_upload_urls,
-    close_session,
     download_zip,
     get_headers,
-    get_session,
     poll_batch_result,
     upload_file_to_url,
 )
+from mineru_parser.core.http import close_session, get_session
 
 
 class TestGetHeaders:
@@ -472,8 +471,8 @@ class TestDownloadZip:
         )
 
         assert result is None
-        # 应该尝试所有重试: 2 retries * 2 SSL variants * 2 header variants
-        assert mock_session.get.call_count == 2 * 2 * 2
+        # 默认 allow_insecure_fallback=False：2 retries * 1 SSL(verify=True) * 2 headers = 4
+        assert mock_session.get.call_count == 2 * 1 * 2
 
     def test_success_on_retry(self) -> None:
         """验证重试成功后返回内容。"""
@@ -486,9 +485,9 @@ class TestDownloadZip:
 
         mock_session = Mock()
         mock_session.get.side_effect = [
-            mock_response_fail,  # First attempt, verify_ssl=True
-            mock_response_fail,  # First attempt, verify_ssl=False
-            mock_response_success,  # Second attempt, verify_ssl=True
+            mock_response_fail,  # attempt 0, verify=True, header 0
+            mock_response_fail,  # attempt 0, verify=True, header 1
+            mock_response_success,  # attempt 1, verify=True, header 0
         ]
 
         result = download_zip(
@@ -527,3 +526,23 @@ class TestDownloadZip:
         ]
         # 至少有两种不同的 headers 被尝试
         assert len(set(str(h) for h in headers_used)) >= 1
+
+    def test_insecure_fallback_doubles_attempts(self) -> None:
+        """allow_insecure_fallback=True 时，每次重试会额外尝试 verify=False。"""
+        mock_response = Mock()
+        mock_response.status_code = 500
+
+        mock_session = Mock()
+        mock_session.get.return_value = mock_response
+
+        download_zip(
+            zip_url="https://download.example.com/result.zip",
+            token="test_token",
+            timeout=60,
+            max_retries=2,
+            retry_wait_cap=0.01,
+            session=mock_session,
+            allow_insecure_fallback=True,
+        )
+        # 2 retries * 2 SSL variants * 2 header variants = 8
+        assert mock_session.get.call_count == 2 * 2 * 2

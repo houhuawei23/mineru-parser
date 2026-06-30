@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from mineru_parser.image_processor import extract_image_refs, process_images
+from mineru_parser.engines.image_processor import extract_image_refs, process_images
 
 
 def test_extract_image_refs_empty() -> None:

@@ -28,18 +28,29 @@
 ```text
 mineru-parser/
 ├── mineru_parser/
-│   ├── api.py                # MinerU API 调用与自动分片
-│   ├── cache.py              # 解析结果缓存管理
-│   ├── cli.py                # Typer CLI 入口
-│   ├── config.py             # 配置加载与校验
+│   ├── main.py               # Typer app 入口 + 全局回调 + bootstrap
+│   ├── console.py            # Rich 终端 UI（面板/表格/进度条）
+│   ├── logging_setup.py      # loguru 每次运行日志（按天分子目录）
+│   ├── errors.py             # 统一异常体系
 │   ├── default_config.yml    # 默认配置（强制存在）
-│   ├── image_processor.py    # 图片重命名与格式转换
-│   ├── json_parser.py        # content_list JSON -> Markdown
-│   ├── markdown.py           # Markdown 生成与合并
-│   ├── pdf_splitter.py       # PDF 按页/大小切分
-│   ├── progress.py           # CLI 进度报告
-│   ├── state.py              # 批量任务状态管理（断点续传）
-│   └── utils.py              # URL 解析与下载等工具
+│   ├── models/               # Pydantic 配置与 DTO
+│   │   ├── config.py         #   RootConfig + load_config
+│   │   └── params.py         #   ParseParams / RunContext
+│   ├── core/                 # 业务编排（loguru 记录日志）
+│   │   ├── orchestrator.py   #   单 PDF 解析 + 自动分片
+│   │   ├── api_client.py     #   MinerU HTTP 传输
+│   │   ├── http.py           #   线程本地连接池
+│   │   ├── batch.py          #   并发批处理
+│   │   └── result.py         #   ParseResult
+│   ├── commands/             # Typer 子命令（parse / batch / from-json）
+│   └── engines/              # 可复用纯逻辑
+│       ├── pdf_splitter.py   #   PDF 按页/大小切分
+│       ├── json_parser.py    #   content_list JSON -> Markdown
+│       ├── markdown.py       #   Markdown 生成与合并
+│       ├── image_processor.py#   图片重命名与格式转换
+│       ├── cache.py          #   解析结果缓存
+│       ├── state.py          #   批量状态（断点续传）
+│       └── utils.py          #   URL 解析与下载
 ├── test/                     # 单元测试
 ├── config.yml                # 本地配置（请勿提交真实 token）
 ├── config.example.yml        # 配置示例
@@ -300,6 +311,13 @@ pytest --cov=mineru_parser --cov-report=html
 
 ## 版本历史
 
+### v2.0.0 (2026-06-30)
+
+破坏性分层重构：`core/`（业务+loguru）× `commands/`（Typer+Rich）× `models/`（Pydantic）× `engines/`。
+专业日志系统（每次运行单独文件、按天分子目录、含运行命令/各阶段耗时/执行结果）；
+Rich 统一终端 UI；移除 tqdm；Pydantic 配置校验；删除全局信号量单例与遗留文件。
+详见 [CHANGELOG.md](CHANGELOG.md)。
+
 ### v1.5.3 (2026-06-30)
 
 - **修复**：脚注（footnote）被错误堆到 Markdown 文档末尾
@@ -411,6 +429,8 @@ pytest --cov=mineru_parser --cov-report=html
 ### Contributors
 
 - [mineru-parser contributors](https://github.com/houhuawei23/mineru-parser)
+- [kimi-code](https://github.com/kimi-code) — AI 协作 agent（共同开发者）
+- GLM-5.2 — AI 协作模型（共同开发者）
 - kimi-code（Kimi AI Agent）
 - kimi-k2.7（Kimi 大语言模型）
 

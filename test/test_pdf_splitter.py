@@ -2,7 +2,7 @@
 
 import pytest
 
-from mineru_parser.pdf_splitter import (
+from mineru_parser.engines.pdf_splitter import (
     extract_pages_to_pdf,
     get_pdf_info,
     parse_pages_spec,

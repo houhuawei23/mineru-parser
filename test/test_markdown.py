@@ -1,6 +1,6 @@
 """Markdown 生成模块单元测试。"""
 
-from mineru_parser.markdown import remove_line_number_blocks
+from mineru_parser.engines.markdown import remove_line_number_blocks
 
 
 def test_remove_line_number_blocks_removes_number_blocks() -> None:

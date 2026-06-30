@@ -414,21 +414,6 @@ def _ends_with_sentence_end(text: str) -> bool:
     return bool(text.rstrip() and text.rstrip()[-1] in SENTENCE_END_CHARS)
 
 
-def _sort_items_by_reading_order(items: list[dict]) -> list[dict]:
-    """按 (page_idx, column, -bbox[1]) 排序：先左栏后右栏，栏内从上到下。"""
-
-    def key_fn(x: dict) -> tuple[int, int, float]:
-        page = x.get("page_idx", 0)
-        bbox = x.get("bbox") or [0, 0, 0, 0]
-        x_center = (bbox[0] + bbox[2]) / 2 if len(bbox) >= 4 else 0
-        y_val = bbox[1] if len(bbox) > 1 else 0
-        # 分栏：x < 500 为左栏，否则右栏
-        column = 0 if x_center < 500 else 1
-        return (page, column, -float(y_val))
-
-    return sorted(items, key=key_fn)
-
-
 def _detect_language(text: str) -> str:
     """检测文本主要语言，返回 'zh' 或 'en'。"""
     if not text:
@@ -649,13 +634,10 @@ def content_list_json_to_markdown(
         logger.warning("content_list JSON 格式异常：非列表")
         return ""
 
-    # 使用原始顺序（MinerU 通常已按阅读顺序输出），避免多栏排版时排序错误
-    sorted_items = data
-
-    # 按页分组：内容块、脚注、元信息
+    # 按页分组：内容块、脚注、元信息。使用原始顺序（MinerU 通常已按阅读顺序输出）。
     pages_data: dict[int, ParsedPage] = defaultdict(ParsedPage)
 
-    for item in sorted_items:
+    for item in data:
         t = item.get("type", "")
         text = _extract_text_from_content_list_item(item)
         page_idx = item.get("page_idx", 0)
@@ -674,8 +656,8 @@ def content_list_json_to_markdown(
                 md = _item_to_content_md(item, text)
                 if md:
                     is_plain = _is_plain_paragraph(item)
-                    # 延迟计算 footnote_pairs，在构建 flat_blocks 时统一处理
-                    page.content_blocks.append((md, item, is_plain))
+                    # 缓存已提取的 text，避免在构建 flat_blocks 时重复提取（每个 item 仅提取一次）
+                    page.content_blocks.append((md, item, is_plain, text))
 
     # 构建扁平内容流
     flat_blocks: list[ContentBlock] = []
@@ -684,8 +666,7 @@ def content_list_json_to_markdown(
         footnotes = page.footnotes
         fn_idx = 0
 
-        for md, item, is_plain in page.content_blocks:
-            text = _extract_text_from_content_list_item(item)
+        for md, item, is_plain, text in page.content_blocks:
             refs = _extract_footnote_refs(text)
             pairs = []
             for _ in refs:

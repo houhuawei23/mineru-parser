@@ -8,8 +8,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from mineru_parser.image_processor import process_images
-from mineru_parser.json_parser import (
+from mineru_parser.engines.image_processor import process_images
+from mineru_parser.engines.json_parser import (
     content_list_json_to_markdown,
     content_list_v2_to_markdown,
     convert_html_tables_to_markdown,
@@ -240,7 +240,7 @@ def merge_markdown_parts(
     """
     import re
     import shutil
-    from mineru_parser.image_processor import IMAGE_REF_PATTERN
+    from mineru_parser.engines.image_processor import IMAGE_REF_PATTERN
 
     # 匹配 {images_dir_name}/image_xx.png
     esc = re.escape(images_dir_name)

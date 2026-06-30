@@ -30,6 +30,9 @@ download:
   max_retries: 5
   # 重试等待基数（秒），实际等待 min(30, 2^attempt)
   retry_wait_cap: 30
+  # 下载结果 zip 时，若 SSL 校验失败是否允许降级到不校验 SSL 的回退尝试。
+  # 默认关闭：仅在信任网络环境且遇到对端证书问题时才建议开启。
+  allow_insecure_fallback: false
 
 # ==================== 分片与并发 ====================
 split:

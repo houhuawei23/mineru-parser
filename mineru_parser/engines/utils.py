@@ -1,8 +1,9 @@
 """工具函数：URL 解析、PDF 下载等。"""
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
-from typing import Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -56,7 +57,7 @@ def download_pdf_from_url(url: str, save_path: Path, timeout: int = 120) -> bool
 def resolve_input_to_pdf(
     input_or_url: str,
     output_dir: Path | None = None,
-) -> Tuple[Path | None, str | None]:
+) -> tuple[Path | None, str | None]:
     """
     将输入（本地路径或 URL）解析为可用的 PDF 路径及输出 stem。
 

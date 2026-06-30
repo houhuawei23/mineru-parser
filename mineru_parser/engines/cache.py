@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from mineru_parser.config import Config
+    from mineru_parser.models.config import RootConfig
 
 
 # 用于缓存的内部函数，基于文件路径和修改时间
@@ -36,7 +36,7 @@ def _compute_pdf_hash_cached(
     return h.hexdigest()
 
 
-def _compute_pdf_hash(pdf_path: Path, config: "Config") -> str:
+def _compute_pdf_hash(pdf_path: Path, config: "RootConfig") -> str:
     """
     计算 PDF 文件的 SHA256 哈希，用于缓存键。
 
@@ -60,7 +60,7 @@ def _compute_pdf_hash(pdf_path: Path, config: "Config") -> str:
 def get_cached_zip(
     pdf_path: Path,
     cache_dir: Path,
-    config: "Config",
+    config: "RootConfig",
     model_version: str = "vlm",
 ) -> bytes | None:
     """
@@ -92,7 +92,7 @@ def save_to_cache(
     pdf_path: Path,
     zip_content: bytes,
     cache_dir: Path,
-    config: "Config",
+    config: "RootConfig",
     model_version: str = "vlm",
 ) -> Path | None:
     """
@@ -121,7 +121,7 @@ def save_to_cache(
         return None
 
 
-def get_default_cache_dir(config: "Config") -> Path:
+def get_default_cache_dir(config: "RootConfig") -> Path:
     """从配置获取默认缓存目录。
 
     :param config: 配置对象

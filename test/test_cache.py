@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 
-from mineru_parser.cache import (
+from mineru_parser.engines.cache import (
     _compute_pdf_hash,
     _compute_pdf_hash_cached,
     get_cached_zip,

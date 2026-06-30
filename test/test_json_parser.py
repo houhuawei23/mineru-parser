@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 
-from mineru_parser.json_parser import (
+from mineru_parser.engines.json_parser import (
     find_content_list_json,
     content_list_json_to_markdown,
     content_list_v2_to_markdown,

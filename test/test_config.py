@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from mineru_parser.config import ConfigError, load_config
+from mineru_parser.models.config import ConfigError, load_config
 
 
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

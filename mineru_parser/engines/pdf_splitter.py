@@ -80,8 +80,7 @@ def parse_pages_spec(spec: str, num_pages: int) -> tuple[list[int], list[str]]:
 
     sorted_pages = sorted(pages_1based)
     indices = [p - 1 for p in sorted_pages]
-    for w in warnings:
-        logger.warning(w)
+    # 仅返回告警，不在函数内记录；由调用方（编排层）决定日志与终端展示。
     return indices, warnings
 
 

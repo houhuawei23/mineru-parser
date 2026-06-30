@@ -1,5 +1,50 @@
 # Changelog
 
+## v2.0.0 (2026-06-30)
+
+**破坏性重构**：按「专业、健壮、易用、可维护」目标全面分层重写，终端 UI 与日志系统专业化。
+
+### Breaking Changes
+
+- 包结构重构为分层架构：`core/`（业务编排 + loguru）、`commands/`（Typer + Rich）、
+  `models/`（Pydantic 配置与 DTO）、`engines/`（可复用纯逻辑）。
+  - `api.py` 拆分为 `core/{orchestrator,api_client,http,batch,result}.py`，已删除。
+  - `config.py` 迁移为 `models/config.py`（Pydantic v2），已删除。
+  - `cli.py` 拆分为 `main.py` + `commands/`，已删除。
+  - `progress.py` 替换为 `console.py`（Rich），已删除。
+  - 入口改为 `mineru_parser.main:app`。
+- 公共 API 调整：单 PDF 解析由 `parse_pdf_via_api_with_auto_split(**25个参数)` 收拢为
+  `orchestrate_parse(ParseParams, RunContext)`；批量由 `parse_pdfs_concurrent(list[dict])`
+  收拢为 `run_batch(list[ParseParams], RunContext)`。
+- 移除 `tqdm` 依赖，进度条统一由 Rich 承担。
+- 配置层使用 Pydantic 校验：未知字段报错（`extra="forbid"`）、类型/正整数校验、
+  `cache.dir` 自动 `~` 展开。
+
+### Features
+
+- **专业日志系统**：每次运行一个独立日志文件，按天分子目录
+  `~/.cache/mineru_parser/logs/YYYY-MM-DD/YYYY-MM-DD_HHMMSS.log`；记录运行命令、起始时间、
+  各阶段耗时（apply/upload/poll/download/build）、最终执行结果（`=== RUN START/END ===`）。
+- **Rich 终端 UI**：运行参数面板、dry-run 文件清单表、批次结果表、断点续传面板、成功/失败面板、
+  动态进度条（spinner + 阶段文本 + 进度），多线程分片下加锁安全。
+- 新增 `--verbose` 在终端显示 INFO 级日志；`-q/--quiet/-d/--debug` 控制终端日志级别。
+- 配置新增 `download.allow_insecure_fallback`（默认 false），显式控制 zip 下载的 SSL 降级；
+  不再全局关闭 urllib3 警告。
+
+### Refactor
+
+- 删除遗留/重复文件：`.mineru_api_client.py`、`mineru_parse_pdf.py`、`demo.py`。
+- 删除全局 API 信号量单例（`_api_semaphore`/`get_api_semaphore`/`reset_api_semaphore`），
+  改为命令层一次性构造 `RunContext.rate_limiter` 显式注入，消除测试泄漏 workaround。
+- `json_parser`：移除死代码 `_sort_items_by_reading_order`；每个 item 仅提取一次文本（原为两次）。
+- `pdf_splitter.parse_pages_spec`：不再在函数内记录告警，由编排层统一转发。
+- 全局统一 PEP 604 联合类型与 `from __future__ import annotations`；收窄多处裸 `except`。
+- 新增测试：`test_logging.py`、`test_state.py`；重写 `test_progress.py`、`test_cli.py`、`test_api.py` 的 download_zip 用例。
+
+### Dependencies
+
+- 新增 `rich>=13.7.0`、`pydantic>=2.5.0`；移除 `tqdm`。
+
 ## v1.5.3 (2026-06-30)
 
 ### Fixed

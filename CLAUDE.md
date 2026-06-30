@@ -43,87 +43,77 @@ mineru-parse from-json ./paper_parsed -o ./output.md
 
 ## Architecture
 
-### Configuration System (config.py)
+The package is **layered** (v2.0.0+). Each layer has a single concern:
 
-Configuration is loaded in a strict priority order (later overrides earlier):
+- `main.py` + `commands/` — **Typer + Rich** (human I/O only). Command functions stay thin: parse args → resolve config → call orchestrator → render via Rich → log result.
+- `core/` — **business orchestration** (uses loguru, never Rich). HTTP transport, single-PDF parse + auto-split, concurrent batch.
+- `models/` — **Pydantic v2** config + DTOs (`ParseParams`, `RunContext`, `ParseResult`).
+- `engines/` — **reusable pure logic** (splitter, JSON parser, markdown, images, cache, state, utils). No CLI/Rich/logging coupling.
+- `console.py` — Rich `Console` singleton, render helpers (`render_run_header`, `render_result_panel`, `render_dry_run_table`, `render_batch_summary`, …) and `RichProgressReporter` (replaces tqdm).
+- `logging_setup.py` — loguru per-run file sink (`~/.cache/mineru_parser/logs/YYYY-MM-DD/YYYY-MM-DD_HHMMSS.log`) with `=== RUN START ===`/`=== RUN END ===` markers + per-stage timing.
+- `errors.py` — `MineruError` hierarchy.
+
+### Configuration System (models/config.py)
+
+Pydantic v2 models (`RootConfig` aggregating `ApiConfig`/`SplitConfig`/`CacheConfig`/`MarkdownConfig`/`OutputConfig`/`BatchConfig`/`PdfDownloadConfig`/`DownloadConfig`/`ConfigMeta`). Loaded in strict priority order (later overrides earlier):
 1. `mineru_parser/default_config.yml` (package defaults, required)
 2. Current directory `config.yml` (user project config)
 3. Environment variable `MINERU_TOKEN`
 4. Command-line `-c/--config` specified file
 5. Command-line `-t/--token` for token only
 
-The `Config` class exposes all settings as typed attributes. All configuration must come from YAML files; there are no hardcoded defaults in the code.
+Pydantic validates types/positive-ints, expands `~` in `cache.dir`, and forbids unknown keys (`extra="forbid"`). `RootConfig` also exposes ~30 flat `@property` accessors (e.g. `cfg.cache_dir`, `cfg.api_rate_limit`) so engines/orchestrator read sites stay simple.
 
 ### Core Processing Flow
 
 ```
-CLI (cli.py)
+CLI command (commands/parse.py)
+    ↓  builds ParseParams + RunContext(ctx.obj)
+orchestrate_parse(params, ctx) (core/orchestrator.py)
     ↓
-parse_pdf_via_api_with_auto_split() (api.py)
+[If adaptive split enabled or PDF exceeds limits] → split_pdf_adaptive() / split_pdf_by_limits() (engines/pdf_splitter.py)
     ↓
-[If adaptive split enabled or PDF exceeds limits] → split_pdf_adaptive() / split_pdf_by_limits() (pdf_splitter.py)
+parse_pdf_via_api() (core/orchestrator.py) - handles caching
     ↓
-parse_pdf_via_api() (api.py) - handles caching
+core/api_client.py: apply_upload_urls → upload_file_to_url → poll_batch_result → download_zip
     ↓
-[Upload → Poll → Download] MinerU API
+build_markdown_from_zip() (engines/markdown.py)
     ↓
-build_markdown_from_zip() (markdown.py)
-    ↓
-[If split] merge_markdown_parts() (markdown.py)
+[If split] merge_markdown_parts() (engines/markdown.py)
 
 Batch mode (concurrency > 1):
-parse_pdfs_concurrent() (api.py)
+commands/batch.py → run_batch(list[ParseParams], ctx) (core/batch.py)
     ↓
-ThreadPoolExecutor → N × parse_pdf_via_api_with_auto_split()
+ThreadPoolExecutor(batch_concurrency) → N × orchestrate_parse()
     ↓
-[Shared API semaphore limits total concurrent API calls]
+[Shared ctx.rate_limiter limits total concurrent API calls across files + fragments]
 ```
 
 ### Key Components
 
-**API Module (api.py)**
-- `parse_pdf_via_api()`: Core function for single PDF processing with caching support
-- `parse_pdf_via_api_with_auto_split()`: Handles PDFs by splitting and concurrent processing, supports adaptive splitting via `target_chunk_pages`
-- `parse_pdfs_concurrent()`: Processes multiple PDF files concurrently with shared API semaphore
-- `get_api_semaphore()` / `reset_api_semaphore()`: Shared API rate-limiting semaphore (lazy singleton)
-- Uses `ThreadPoolExecutor` for concurrent fragment processing
-- **Connection Pooling**: Uses `requests.Session()` with `HTTPAdapter` for connection reuse. Sessions are stored in thread-local storage (`_thread_local`) for thread safety.
-- **Session Management**: `get_session()` returns a pooled session; `close_session()` cleans up the current thread's session
+**Core orchestration (core/orchestrator.py)**
+- `orchestrate_parse(params, ctx)`: Single PDF with auto-split (collapsed from the old 25-positional-arg signature into `ParseParams`); uses `ctx.rate_limiter` for fragment concurrency.
+- `parse_pdf_via_api()`: Single fragment upload→poll→download→build with caching (unchanged signature).
+- `_clean_output_dir()`: Keeps only `*.md` + `images/`.
 
-**PDF Splitter (pdf_splitter.py)**
-- `split_pdf_by_limits()`: Splits PDFs by page count and file size (only when exceeding limits)
-- `split_pdf_adaptive()`: Adaptive splitting — splits PDFs into `target_chunk_pages` chunks even when within limits, for concurrent API acceleration
-- `parse_pages_spec()`: Parses CLI page range syntax (e.g., "10-20,30-40")
-- `extract_pages_to_pdf()`: Extracts specific pages to a new PDF
+**Core transport (core/api_client.py + core/http.py)**
+- `apply_upload_urls`, `upload_file_to_url`, `poll_batch_result`, `download_zip` (download has `allow_insecure_fallback`, no global warning suppression).
+- `get_session()`/`close_session()`: thread-local `requests.Session()` with `HTTPAdapter` pooling; `atexit`-registered cleanup.
 
-**Markdown Generation (markdown.py)**
-- `build_markdown_from_zip()`: Extracts zip, processes images, generates Markdown
-- `regenerate_markdown_from_json()`: Re-creates Markdown from existing JSON output
-- `merge_markdown_parts()`: Merges split PDF results with image renumbering
+**Core batch (core/batch.py)**
+- `run_batch(tasks, ctx, batch_concurrency, on_complete)`: returns `list[ParseResult]`; shares `ctx.rate_limiter`.
 
-**Image Processing (image_processor.py)**
-- Filters to only referenced images
-- Renames to `image_xx.png` format
-- Converts formats to PNG
-- Updates Markdown references
+**PDF Splitter (engines/pdf_splitter.py)** — `split_pdf_by_limits()`, `split_pdf_adaptive()`, `parse_pages_spec()` (returns warnings only — no longer logs inside), `extract_pages_to_pdf()`.
 
-**Cache (cache.py)**
-- Content-addressable storage using PDF hash
-- Cache key uses first N chars of hash as subdir prefix
-- Default location: `~/.cache/mineru_parser/`
+**Markdown (engines/markdown.py)** — `build_markdown_from_zip()`, `regenerate_markdown_from_json()`, `merge_markdown_parts()`.
 
-**JSON Parser (json_parser.py)**
-- Converts `content_list.json` and `content_list_v2.json` to Markdown
-- Handles text, images, tables, equations, and footnotes
+**Image / Cache / State / JSON** (engines/) — unchanged engines; cache is content-addressed (SHA256), state is SQLite (WAL) with `try_start_job()` atomic claim.
 
-### CLI Structure (cli.py)
+**Concurrency note**: there is NO global semaphore anymore. `RunContext.rate_limiter` (a `threading.Semaphore(cfg.api_rate_limit)`) is constructed once in `main_callback` and shared by `orchestrate_parse` (fragments) and `run_batch` (files).
 
-Uses Typer with three main commands:
-- `parse`: Single PDF/URL processing
-- `batch`: Directory processing with glob patterns
-- `from-json`: Regenerate Markdown from JSON
+### CLI Structure (main.py + commands/)
 
-Global options in `main_callback()` are stored in `ctx.obj` and inherited by subcommands.
+Typer app in `main.py`; three commands in `commands/{parse,batch,from_json}.py`. Global options in `main_callback()` build a `RunContext` stored on `ctx.obj` (config, rate_limiter, log_path, force/no_cache/dry_run/quiet flags). Shared helpers (`build_parse_params`, `resolve_output_dir`, `build_md_options`, `validate_token`) live in `commands/_shared.py`. Console-level flags: `-q/--quiet`, `-d/--debug`, `--verbose` control the loguru stderr sink level.
 
 ## Important Implementation Details
 
@@ -140,11 +130,11 @@ The API module uses `requests.Session()` with connection pooling for better perf
 - Never commit real tokens to the repository
 
 ### Rate Limiting
-- API concurrency is controlled by `api_rate_limit` (default 5) using a shared `threading.Semaphore`
+- API concurrency is controlled by `api_rate_limit` (default 5) via `RunContext.rate_limiter` (a `threading.Semaphore`)
 - Limits total concurrent API calls across all files and their split fragments
-- Shared via `get_api_semaphore()` lazy singleton — ensures one global limit
-- Separate from `max_workers` which controls thread pool size for I/O operations
-- Applies to both split PDF fragment processing and concurrent batch file processing
+- Constructed once per CLI invocation in `main_callback()` and injected via `RunContext` — **no global singleton** (the old `_api_semaphore`/`get_api_semaphore`/`reset_api_semaphore` were removed)
+- Separate from `max_workers` which controls thread pool size for fragment I/O
+- Applies to both split PDF fragment processing (`orchestrate_parse`) and concurrent batch file processing (`run_batch`)
 
 ### Parallel Image Processing
 - Image conversion uses `ProcessPoolExecutor` (default 4 workers) for CPU-bound PIL operations
@@ -195,12 +185,14 @@ The API module uses `requests.Session()` with connection pooling for better perf
 ## Testing Structure
 
 Tests are in the `test/` directory using pytest:
-- `test_config.py`: Configuration loading
+- `test_config.py`: Pydantic configuration loading & validation
 - `test_pdf_splitter.py`: PDF splitting and page spec parsing
 - `test_markdown.py`: Markdown generation
 - `test_json_parser.py`: JSON parsing
 - `test_image_processor.py`: Image processing
-- `test_api.py`: API module tests (connection pooling, HTTP requests, retries)
-- `test_cli.py`: CLI command tests (parse, batch, from-json commands)
+- `test_api.py`: Core HTTP transport (api_client) + connection pooling (http) + retries
+- `test_cli.py`: CLI commands via `main.app` (parse, batch, from-json; real `RootConfig`)
 - `test_cache.py`: Cache and hash memoization tests
-- `test_state.py`: Batch state management tests
+- `test_state.py`: Batch state management (resume, atomic claim) tests
+- `test_progress.py`: Rich `RichProgressReporter` + render helpers
+- `test_logging.py`: Per-run log path format + RUN START/END markers
