@@ -404,6 +404,41 @@ def test_footnote_not_inline_by_default() -> None:
             Path(f.name).unlink()
 
 
+def test_footnote_html_sup_ref_inline() -> None:
+    """``<sup>N</sup>`` HTML 上标引用在 inline_footnotes=True 时应内联到引用段落后。
+
+    回归用例：MinerU 对部分 PDF 输出 ``<sup>1</sup>`` 形式的脚注引用，此前
+    `_extract_footnote_refs` 仅识别圆圈数字与 ``$^{N}$``，导致引用无法关联到脚注、
+    所有脚注被堆到文档末尾。
+    """
+    data = [
+        {
+            "type": "text",
+            "text": "it is multimodal<sup>1</sup>. Annotators disagree.",
+            "page_idx": 0,
+        },
+        {"type": "text", "text": "Another paragraph follows.", "page_idx": 0},
+        {
+            "type": "page_footnote",
+            "text": "<sup>1</sup>Multimodal is used here in its statistical sense.",
+            "page_idx": 0,
+        },
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        try:
+            md = content_list_json_to_markdown(Path(f.name), inline_footnotes=True)
+            # 引用段落后应紧跟 footnote 块（内联），而非堆到文档末尾
+            assert "Annotators disagree.\n\n<!-- footnote -->" in md
+            assert "Multimodal is used here" in md
+            # 末尾应是“另一个段落”，而非 footnote end（说明未被堆到末尾）
+            assert not md.strip().endswith("<!-- footnote end -->")
+            assert "Another paragraph follows." in md
+        finally:
+            Path(f.name).unlink()
+
+
 def test_multi_line_footnote_format() -> None:
     """多行脚注每项都应带 - 前缀。"""
     data = [

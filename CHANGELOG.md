@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.5.3 (2026-06-30)
+
+### Fixed
+
+- 修复脚注（footnote）被错误堆到 Markdown 文档末尾的问题：当 PDF 正文使用
+  `<sup>N</sup>` 形式的脚注引用时（MinerU 对部分 PDF 的常见输出），脚注内容
+  无法关联到引用位置，导致所有脚注统一输出到文档末尾，而非跟随引用段落。
+  - 原因：`_extract_footnote_refs` 仅识别 Unicode 圆圈数字（①②…）与 LaTeX 上标
+    （`$^{N}$`），未识别 HTML 上标 `<sup>N</sup>`，导致 `footnote_pairs` 为空、
+    `has_inline_refs=False`，即便配置 `inline_footnotes: true` 也走兜底逻辑把脚注
+    全部堆到末尾。
+  - 修复：新增 `HTML_SUP_FOOTNOTE_REF_PATTERN`，`_extract_footnote_refs` 同时匹配
+    `<sup>N</sup>`。配置 `inline_footnotes: true` 时，脚注会内联到引用段落后。
+  - 效果（真实 PDF 验证）：脚注 1 从文档末尾（约第 68k 字符处）移至引用段落之后
+    （约第 3.3k 字符处），v1/v2 两种 content_list 均生效。
+
+### Tests
+
+- 新增 `test_footnote_html_sup_ref_inline`：验证 `<sup>N</sup>` 引用在
+  `inline_footnotes=True` 时内联到引用段落后、不再堆到文档末尾。
+- 完整测试套件：138 个测试全部通过。
+
+### Contributors
+
+- mineru-parser contributors
+- Claude（Anthropic）
+
 ## v1.5.2 (2026-06-30)
 
 ### Fixed

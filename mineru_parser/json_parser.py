@@ -15,6 +15,8 @@ FOOTNOTE_REFS = "①②③④⑤⑥⑦⑧⑨⑩"
 FOOTNOTE_REF_PATTERN = re.compile(f"[{FOOTNOTE_REFS}]")
 # LaTeX 上标脚注引用格式：$^{1}$, $^{2}$ 等
 LATEX_FOOTNOTE_REF_PATTERN = re.compile(r"\$\^\{(\d+)\}\$")
+# HTML 上标脚注引用格式：<sup>1</sup>, <sup>2</sup> 等（MinerU 对部分 PDF 的常见输出）
+HTML_SUP_FOOTNOTE_REF_PATTERN = re.compile(r"<sup>\s*(\d+)\s*</sup>")
 # 句末标点：用于判断段落是否可在跨页时合并
 # 包含中英文句号、问号、感叹号、引号、分号、冒号以及 proof end 符号 □
 SENTENCE_END_CHARS = '。！？；：」".?!□'
@@ -441,11 +443,17 @@ def _detect_language(text: str) -> str:
 
 
 def _extract_footnote_refs(text: str) -> list[str]:
-    """从文本中按出现顺序提取脚注引用符号。支持 Unicode 圆圈数字和 LaTeX 上标格式。"""
+    """从文本中按出现顺序提取脚注引用符号。
+
+    支持 Unicode 圆圈数字（①②…）、LaTeX 上标（``$^{1}$``）和 HTML 上标（``<sup>1</sup>``）。
+    """
     refs = FOOTNOTE_REF_PATTERN.findall(text)
     # 同时匹配 $^{N}$ 格式的 LaTeX 上标脚注
     latex_refs = LATEX_FOOTNOTE_REF_PATTERN.findall(text)
     refs.extend(latex_refs)
+    # 同时匹配 <sup>N</sup> 格式的 HTML 上标脚注
+    html_refs = HTML_SUP_FOOTNOTE_REF_PATTERN.findall(text)
+    refs.extend(html_refs)
     return refs
 
 

@@ -300,6 +300,15 @@ pytest --cov=mineru_parser --cov-report=html
 
 ## 版本历史
 
+### v1.5.3 (2026-06-30)
+
+- **修复**：脚注（footnote）被错误堆到 Markdown 文档末尾
+  - 现象：当正文使用 `<sup>N</sup>` 形式脚注引用时（MinerU 对部分 PDF 的常见输出），脚注内容无法关联到引用位置，全部被堆到文档末尾
+  - 原因：`_extract_footnote_refs` 仅识别圆圈数字（①②…）与 LaTeX 上标（`$^{N}$`），未识别 HTML 上标 `<sup>N</sup>`，即便配置 `inline_footnotes: true` 也走兜底逻辑堆到末尾
+  - 修复：新增 `<sup>N</sup>` 识别；配置 `inline_footnotes: true` 时脚注内联到引用段落后（真实 PDF 验证：脚注从文末约第 68k 字符处移至引用段落后约第 3.3k 字符处）
+- **测试**：新增 `<sup>N</sup>` 脚注内联回归测试，完整测试套件 138 个全部通过
+- **文档**：更新 CHANGELOG、README、版本号
+
 ### v1.5.2 (2026-06-30)
 
 - **修复**：大 PDF 切分极慢的问题
