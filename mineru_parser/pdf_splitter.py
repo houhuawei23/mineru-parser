@@ -6,6 +6,18 @@ import re
 from pathlib import Path
 
 from loguru import logger
+
+# 优先使用 pymupdf (fitz)：C 实现，对复杂内部结构的 PDF 切分比纯 Python 的 pypdf
+# 快数百倍（真实 622 页 PDF 实测：切 50 页 pypdf≈37s，pymupdf≈0.11s）。
+# pypdf 仅作为 pymupdf 不可用时的 fallback。
+try:
+    import fitz  # type: ignore[import-untyped]
+
+    _HAS_FITZ = True
+except ImportError:  # pragma: no cover - fallback 路径，仅 pymupdf 缺失时触发
+    fitz = None  # type: ignore[assignment]
+    _HAS_FITZ = False
+
 from pypdf import PdfReader, PdfWriter
 
 # 允许的页码片段：单页 "12" 或区间 "10-20"
@@ -73,6 +85,73 @@ def parse_pages_spec(spec: str, num_pages: int) -> tuple[list[int], list[str]]:
     return indices, warnings
 
 
+def _save_page_range(src: Path, start: int, end: int, dest: Path) -> None:
+    """
+    将 ``src`` 的连续页区间 ``[start, end)``（0-based、左闭右开）写入新 PDF ``dest``。
+
+    优先用 pymupdf（``insert_pdf`` 一次性拷贝连续区间，最快）；不可用时回退 pypdf。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if _HAS_FITZ:
+        doc = fitz.open(str(src))
+        try:
+            out = fitz.open()
+            try:
+                out.insert_pdf(doc, from_page=start, to_page=end - 1)
+                out.save(str(dest), deflate=True)
+            finally:
+                out.close()
+        finally:
+            doc.close()
+        return
+
+    # fallback: pypdf
+    reader = PdfReader(str(src))
+    writer = PdfWriter()
+    for i in range(start, end):
+        writer.add_page(reader.pages[i])
+    with open(dest, "wb") as f:
+        writer.write(f)
+
+
+def _save_page_indices(src: Path, page_indices_0based: list[int], dest: Path) -> None:
+    """
+    将 ``src`` 的任意页（0-based 列表，可非连续/乱序）按序写入新 PDF ``dest``。
+
+    越界索引会抛出 ``ValueError``。优先用 pymupdf（逐页 ``insert_pdf``），
+    不可用时回退 pypdf。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if _HAS_FITZ:
+        doc = fitz.open(str(src))
+        try:
+            n = doc.page_count
+            for i in page_indices_0based:
+                if i < 0 or i >= n:
+                    raise ValueError(f"页索引越界: {i}（PDF 共 {n} 页）")
+            out = fitz.open()
+            try:
+                for i in page_indices_0based:
+                    out.insert_pdf(doc, from_page=i, to_page=i)
+                out.save(str(dest), deflate=True)
+            finally:
+                out.close()
+        finally:
+            doc.close()
+        return
+
+    # fallback: pypdf
+    reader = PdfReader(str(src))
+    n = len(reader.pages)
+    writer = PdfWriter()
+    for i in page_indices_0based:
+        if i < 0 or i >= n:
+            raise ValueError(f"页索引越界: {i}（PDF 共 {n} 页）")
+        writer.add_page(reader.pages[i])
+    with open(dest, "wb") as f:
+        writer.write(f)
+
+
 def extract_pages_to_pdf(
     src: Path,
     page_indices_0based: list[int],
@@ -83,16 +162,7 @@ def extract_pages_to_pdf(
     """
     if not page_indices_0based:
         raise ValueError("page_indices_0based 不能为空")
-    reader = PdfReader(str(src))
-    n = len(reader.pages)
-    writer = PdfWriter()
-    for i in page_indices_0based:
-        if i < 0 or i >= n:
-            raise ValueError(f"页索引越界: {i}（PDF 共 {n} 页）")
-        writer.add_page(reader.pages[i])
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(dest, "wb") as f:
-        writer.write(f)
+    _save_page_indices(src, page_indices_0based, dest)
 
 
 def get_pdf_info(pdf_path: Path) -> tuple[int, int]:
@@ -102,9 +172,14 @@ def get_pdf_info(pdf_path: Path) -> tuple[int, int]:
     :return: (num_pages, size_bytes)
     """
     size_bytes = pdf_path.stat().st_size
+    if _HAS_FITZ:
+        doc = fitz.open(str(pdf_path))
+        try:
+            return doc.page_count, size_bytes
+        finally:
+            doc.close()
     reader = PdfReader(str(pdf_path))
-    num_pages = len(reader.pages)
-    return num_pages, size_bytes
+    return len(reader.pages), size_bytes
 
 
 def split_pdf_by_limits(
@@ -135,7 +210,6 @@ def split_pdf_by_limits(
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
-    reader = PdfReader(str(pdf_path))
 
     # 计算每片页数：优先满足页数限制，若单页均摊大小仍超限则进一步切分
     pages_per_chunk = page_limit
@@ -152,12 +226,8 @@ def split_pdf_by_limits(
 
     while start < num_pages:
         end = min(start + pages_per_chunk, num_pages)
-        writer = PdfWriter()
-        for i in range(start, end):
-            writer.add_page(reader.pages[i])
-
         out_path = temp_dir / f"{stem}_part{chunk_idx}.pdf"
-        writer.write(str(out_path))
+        _save_page_range(pdf_path, start, end, out_path)
         output_paths.append(out_path)
         logger.debug(f"已切分: {out_path.name} (页 {start + 1}-{end})")
 
@@ -200,7 +270,6 @@ def split_pdf_adaptive(
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
-    reader = PdfReader(str(pdf_path))
 
     # 计算每片页数：优先使用 target_chunk_pages，再检查大小限制
     pages_per_chunk = target_chunk_pages
@@ -221,12 +290,8 @@ def split_pdf_adaptive(
 
     while start < num_pages:
         end = min(start + pages_per_chunk, num_pages)
-        writer = PdfWriter()
-        for i in range(start, end):
-            writer.add_page(reader.pages[i])
-
         out_path = temp_dir / f"{stem}_part{chunk_idx}.pdf"
-        writer.write(str(out_path))
+        _save_page_range(pdf_path, start, end, out_path)
         output_paths.append(out_path)
         logger.debug(f"已切分: {out_path.name} (页 {start + 1}-{end})")
 

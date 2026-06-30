@@ -94,9 +94,14 @@ class ProgressReporter:
         elif phase == "build":
             typer.echo("正在生成 Markdown...")
 
-        elif phase == "split":
+        elif phase in ("split", "split_done"):
+            # split_done 为切分完成后的确切片段数；split 保留以向后兼容
             total = info.get("total_parts", 0)
             typer.echo(f"PDF 需要切分，共 {total} 个片段")
+
+        elif phase == "split_start":
+            # 切分开始前提示，避免切分期间终端沉默
+            typer.echo("PDF 较大，正在切分为多个片段...")
 
         elif phase == "part_start":
             idx = info.get("idx", 0) + 1

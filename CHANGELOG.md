@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.5.2 (2026-06-30)
+
+### Fixed
+
+- 修复大 PDF 切分极慢的问题：复杂内部结构的 PDF 用 `pypdf` 切分每 50 页耗时约 37s，
+  导致 622 页文档切分阶段总耗时约 8-10 分钟。
+  - 原因：`pdf_splitter.py` 使用纯 Python 的 `pypdf` 切分，对部分真实 PDF（复杂资源树/对象流）
+    的 `add_page` + `write` 走了极慢路径。实测同一真实 PDF：`pypdf` 切 50 页约 37s，
+    `pymupdf`（MuPDF 的 C 绑定）仅约 0.11s。
+  - 修复：切分改用 `pymupdf`（`fitz.insert_pdf`），`pypdf` 保留为 fallback。
+    新增 `_save_page_range` / `_save_page_indices` 两个底层函数统一写入逻辑。
+  - 效果：622 页文档切分从约 480s 降至约 1.5s（提速约 320 倍）。
+- 修复切分进度提示时序反直觉的问题：原 `progress_callback("split")` 在切分**完成后**
+  才发出，导致终端在 `开始解析` 后切分期间长时间沉默，随后才提示"PDF 需要切分"。
+  - 修复：拆分为切分前 `split_start`（"PDF 较大，正在切分为多个片段..."）与切分后
+    `split_done`（确切片段数）两个阶段，切分前即给用户反馈。
+
+### Changed
+
+- `pymupdf>=1.23.0` 加入运行时依赖（`pyproject.toml`），`pypdf` 保留作 fallback。
+
+### Tests
+
+- 新增 `test_pdf_splitter.py` 对切分实际输出的测试（此前仅覆盖 `parse_pages_spec` 字符串解析）：
+  覆盖 `extract_pages_to_pdf`（连续/非连续页、越界）、`split_pdf_by_limits`（按页/按大小/无需切分）、
+  `split_pdf_adaptive`（启用/禁用委托）、`get_pdf_info`，并用 `fitz` 重新打开校验页数与文本。
+- 完整测试套件：137 个测试全部通过。
+
+### Contributors
+
+- mineru-parser contributors
+- Claude（Anthropic）
+
 ## v1.5.1 (2026-06-28)
 
 ### Fixed

@@ -659,6 +659,10 @@ def _parse_pdf_via_api_with_auto_split_body(
     with tempfile.TemporaryDirectory(prefix=config.temp_dir_prefix) as tmp:
         temp_dir = Path(tmp)
 
+        # 切分前先提示，避免切分期间终端无输出（切分本身可能耗时）
+        if progress_callback is not None:
+            progress_callback("split_start", {})
+
         if target_chunk_pages > 0 and num_pages > target_chunk_pages:
             split_paths = split_pdf_adaptive(
                 working_pdf,
@@ -676,7 +680,7 @@ def _parse_pdf_via_api_with_auto_split_body(
             )
 
         if progress_callback is not None:
-            progress_callback("split", {"total_parts": len(split_paths)})
+            progress_callback("split_done", {"total_parts": len(split_paths)})
 
         md_opts = dict(
             include_header=include_header,

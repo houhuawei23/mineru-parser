@@ -273,6 +273,7 @@ pytest --cov=mineru_parser --cov-report=html
 4. **API 速率限制**：共享信号量控制跨文件/分片的总并发 API 调用数
 5. **自适应分片**：按目标页数切分 PDF，多片段并发调用 API，单文件解析速度提升约 N 倍（N=min(分片数, api_rate_limit)）
 6. **批量并发**：多文件同时处理，共享 API 信号量，批量处理速度提升约 batch_concurrency 倍
+7. **高速切分**：PDF 切分使用 `pymupdf`（C 实现），复杂大 PDF 切分比纯 Python `pypdf` 快约数百倍
 
 ## 常见问题
 
@@ -298,6 +299,18 @@ pytest --cov=mineru_parser --cov-report=html
 - 建议定期轮换 Token
 
 ## 版本历史
+
+### v1.5.2 (2026-06-30)
+
+- **修复**：大 PDF 切分极慢的问题
+  - 现象：复杂内部结构的 PDF 切分每 50 页约 37s，622 页文档切分阶段总耗时约 8-10 分钟
+  - 原因：`pdf_splitter.py` 使用纯 Python 的 `pypdf` 切分，对部分真实 PDF 走了极慢路径（同文档 `pypdf` 切 50 页约 37s，`pymupdf` 仅约 0.11s）
+  - 修复：切分改用 `pymupdf`（`fitz.insert_pdf`），`pypdf` 保留为 fallback；622 页切分从约 480s 降至约 1.5s（提速约 320 倍）
+- **修复**：切分进度提示时序反直觉——原"PDF 需要切分"提示在切分完成后才发出，切分期间终端长时间沉默
+  - 修复：拆分为切分前 `split_start`（"PDF 较大，正在切分..."）与切分后 `split_done`（片段数），切分前即反馈
+- **变更**：新增 `pymupdf>=1.23.0` 运行时依赖，`pypdf` 保留作 fallback
+- **测试**：补 `pdf_splitter` 切分实际输出测试（此前仅覆盖页码字符串解析），完整测试套件 137 个全部通过
+- **文档**：更新 CHANGELOG、README、版本号
 
 ### v1.5.1 (2026-06-28)
 
