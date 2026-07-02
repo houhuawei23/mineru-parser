@@ -3,6 +3,8 @@
 import pytest
 
 from mineru_parser.engines.pdf_splitter import (
+    chunk_ranges,
+    compute_pages_per_chunk,
     extract_pages_to_pdf,
     get_pdf_info,
     parse_pages_spec,
@@ -197,3 +199,38 @@ def test_adaptive_splits(tmp_path):
     assert len(out) == 4  # 3 + 3 + 3 + 1
     all_texts = [t for p in out for t in _page_texts(p)]
     assert all_texts == [f"Page {i}" for i in range(10)]
+
+
+# ---------- compute_pages_per_chunk / chunk_ranges（编排层用于稳定缓存键） ----------
+
+
+def test_compute_pages_per_chunk_by_page_limit():
+    """无自适应时按 page_limit，且受大小限制进一步收紧。"""
+    big = 200 * 1024 * 1024
+    # 55 页、page_limit=50、大小充裕 -> 50
+    assert compute_pages_per_chunk(55, 1000, 50, big) == 50
+    # 大小极小 -> 收敛到 1
+    assert compute_pages_per_chunk(10, 1000, 10, 1) == 1
+
+
+def test_compute_pages_per_chunk_adaptive():
+    big = 200 * 1024 * 1024
+    # 自适应：页数超过 target -> 以 target 为基准
+    assert compute_pages_per_chunk(10, 1000, 50, big, target_chunk_pages=3) == 3
+    # 自适应不超过 page_limit
+    assert compute_pages_per_chunk(100, 1000, 20, big, target_chunk_pages=50) == 20
+    # 页数未超过 target -> 退回 page_limit
+    assert compute_pages_per_chunk(3, 1000, 10, big, target_chunk_pages=5) == 10
+
+
+def test_chunk_ranges_aligns_with_split_paths(tmp_path):
+    """chunk_ranges 的边界必须与 split_pdf_by_limits 产出的片段一一对应。"""
+    src = tmp_path / "src.pdf"
+    _make_pdf(src, 12)
+    page_limit, size_limit = 5, _SIZE_100MB
+    ppc = compute_pages_per_chunk(12, src.stat().st_size, page_limit, size_limit)
+    ranges = chunk_ranges(12, ppc)
+    assert ranges == [(0, 5), (5, 10), (10, 12)]
+    # 与实际切分片段的页数一致
+    parts = split_pdf_by_limits(src, page_limit, size_limit, tmp_path / "t")
+    assert [len(_page_texts(p)) for p in parts] == [e - s for s, e in ranges]

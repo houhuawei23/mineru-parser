@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.1.0 (2026-07-02)
+
+### Bug Fixes
+
+- **修复大 PDF / `--pages` 场景缓存恒失效**：缓存键原本取「切分/提取后派生 PDF 的字节
+  SHA256」，而 PyMuPDF `save()` 每次写入都嵌入随机 `/ID` 与时间戳，导致派生字节每次都变、
+  缓存永远 miss。改为基于「**源 PDF 内容 SHA256 + 源页码集合**」的稳定标识
+  （`compute_source_hash` + `describe_page_token`），与派生文件字节的随机性彻底解耦。
+  相同 PDF 连续两次解析现在第二次直接命中缓存、跳过 API。
+
+### Features
+
+- **同一 PDF 的所有片段缓存归入同一目录**，便于查看与管理：
+  ```
+  <cache_dir>/<model>/<safe_stem>_<hash8>/
+      full.zip / p1-50.zip / p51-55.zip / p10-20.zip / h<12hex>.zip
+      source.txt   # 记录源文件名，便于人眼辨认
+  ```
+  目录名含可读文件名前缀与内容短哈希，既好辨认又能区分同名不同内容。
+- **命令行输出缓存目录路径**：`parse` 的运行参数面板与结果面板均展示该 PDF 的缓存组目录，
+  方便直接进入查看原始 zip；`batch` 汇总表追加缓存根目录。
+
+### Breaking Changes
+
+- 缓存公共函数签名调整（基于已解析路径，移除内部哈希计算）：
+  - `get_cached_zip(cache_file: Path) -> bytes | None`
+  - `save_to_cache(cache_file: Path, zip_content: bytes) -> Path | None`
+  - 新增 `compute_source_hash` / `describe_page_token` / `cache_group_dir` / `cache_zip_path` /
+    `write_source_marker`；移除未使用的 `get_default_cache_dir`。
+- `parse_pdf_via_api` 新增 `cache_file: Path | None` 参数（编排层按源身份计算后注入）。
+- **旧版扁平缓存（`<model>/<hash[:2]>/<hash>.zip`）不会自动迁移**；因缓存本就失效，
+  基本无可挽救内容，可手动清理 `~/.cache/mineru_parser/<model>/`。
+
 ## v2.0.0 (2026-06-30)
 
 **破坏性重构**：按「专业、健壮、易用、可维护」目标全面分层重写，终端 UI 与日志系统专业化。

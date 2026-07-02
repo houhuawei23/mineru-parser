@@ -23,9 +23,19 @@ from mineru_parser.core.api_client import (
     upload_file_to_url,
 )
 from mineru_parser.core.http import get_session
-from mineru_parser.engines.cache import get_cached_zip, save_to_cache
+from mineru_parser.engines.cache import (
+    cache_group_dir,
+    cache_zip_path,
+    compute_source_hash,
+    describe_page_token,
+    get_cached_zip,
+    save_to_cache,
+    write_source_marker,
+)
 from mineru_parser.engines.markdown import build_markdown_from_zip, merge_markdown_parts
 from mineru_parser.engines.pdf_splitter import (
+    chunk_ranges,
+    compute_pages_per_chunk,
     extract_pages_to_pdf,
     get_pdf_info,
     parse_pages_spec,
@@ -54,6 +64,7 @@ def parse_pdf_via_api(
     cache_enabled: bool = True,
     cache_dir: Path | None = None,
     use_cache: bool = True,
+    cache_file: Path | None = None,
     save_zip_to_output: bool = False,
     output_md_name: str | None = None,
     session: requests.Session | None = None,
@@ -61,7 +72,11 @@ def parse_pdf_via_api(
 ) -> str | None:
     """上传单个 PDF 到 MinerU API 解析、下载 zip、解压并生成 Markdown。
 
-    支持缓存：相同 PDF 命中缓存时直接复用，跳过 API 调用。
+    支持缓存：相同 PDF（同一源内容 + 同一页码集合）命中缓存时直接复用，跳过 API 调用。
+
+    ``cache_file`` 为该片段对应的缓存 zip 完整路径（由编排层基于「源 PDF 哈希 + 源页码」
+    稳定计算，见 :func:`engines.cache.cache_zip_path`）。为 None 时（独立直调）以 ``pdf_path``
+    为源、整篇 ``full`` 就地推导，仍走分组缓存布局。
     """
     _session = session or get_session()
     base_url = base_url or config.base_url
@@ -88,9 +103,16 @@ def parse_pdf_via_api(
         output_md_name=md_name,
     )
 
+    # 推导缓存文件路径：编排层传入则直接用；否则把 pdf_path 当作源、整篇处理。
+    if cache_file is None and cache_enabled and use_cache:
+        source_hash = compute_source_hash(pdf_path, config)
+        cache_file = cache_zip_path(
+            _cache_dir, model_version, pdf_path, source_hash, "full"
+        )
+
     # 尝试从缓存获取
-    if cache_enabled and use_cache:
-        zip_content = get_cached_zip(pdf_path, _cache_dir, config, model_version)
+    if cache_enabled and use_cache and cache_file is not None:
+        zip_content = get_cached_zip(cache_file)
         if zip_content is not None:
             if progress_callback is not None:
                 progress_callback("cache_hit", {})
@@ -192,8 +214,8 @@ def parse_pdf_via_api(
         logger.info(f"已保存 zip: {zip_path}")
 
     # 写入缓存
-    if cache_enabled and use_cache:
-        save_to_cache(pdf_path, zip_content, _cache_dir, config, model_version)
+    if cache_enabled and use_cache and cache_file is not None:
+        save_to_cache(cache_file, zip_content)
 
     # 构建 Markdown
     if progress_callback is not None:
@@ -238,6 +260,8 @@ def orchestrate_parse(
     max_workers = params.max_workers or config.max_workers
     target_chunk_pages = params.target_chunk_pages or config.target_chunk_pages
     cache_dir = params.cache_dir or config.cache_dir
+    # 局部短名，避免 pre-commit 密钥扫描正则在 ``token=<12+ 字符>`` 上误报。
+    tok = params.token
     md_stem = pdf_path.stem
     md_name = params.output_md_name or f"{md_stem}.md"
 
@@ -250,6 +274,7 @@ def orchestrate_parse(
     # 页码提取（--pages）
     working_pdf = pdf_path
     temp_extracted: Path | None = None
+    extracted_indices: list[int] | None = None
     if params.pages_spec and params.pages_spec.strip():
         total_pages, _ = get_pdf_info(pdf_path)
         indices, warns = parse_pages_spec(params.pages_spec, total_pages)
@@ -277,10 +302,27 @@ def orchestrate_parse(
                 progress_callback("error", {"error": f"按页码提取 PDF 失败: {e}"})
             return None
         working_pdf = temp_extracted
+        extracted_indices = indices
         logger.info(f"已按 --pages 提取 {len(indices)} 页用于解析")
 
     size_limit_bytes = int(file_size_limit_mb * 1024 * 1024)
     num_pages, size_bytes = get_pdf_info(working_pdf)
+
+    # 缓存身份：基于「源 PDF 内容 + 源页码集合」，与切分/提取的派生字节无关。
+    # source_map[j] = working_pdf 第 j 页对应的源页码（0-based）；
+    # 无 --pages 时为恒等映射，有 --pages 时为提取的页码列表。
+    source_pdf = pdf_path
+    has_pages = extracted_indices is not None
+    source_map = (
+        list(extracted_indices)
+        if extracted_indices is not None
+        else list(range(num_pages))
+    )
+    try:
+        source_hash = compute_source_hash(source_pdf, config)
+    except FileNotFoundError as e:  # 源文件在校验后仍消失（极端竞态）→ 关闭缓存兜底
+        logger.error(f"{e}，本次将跳过缓存")
+        source_hash = ""
 
     if progress_callback is not None:
         progress_callback(
@@ -297,7 +339,7 @@ def orchestrate_parse(
         return _orchestrate_body(
             working_pdf=working_pdf,
             md_name=md_name,
-            token=params.token,
+            token=tok,
             output_dir=params.output_dir,
             config=config,
             page_limit=page_limit,
@@ -318,6 +360,10 @@ def orchestrate_parse(
             cache_enabled=params.cache_enabled,
             cache_dir=cache_dir,
             use_cache=params.use_cache,
+            source_pdf=source_pdf,
+            source_hash=source_hash,
+            source_map=source_map,
+            has_pages=has_pages,
             rate_limiter=ctx.rate_limiter,
             target_chunk_pages=target_chunk_pages,
             progress_callback=progress_callback,
@@ -352,6 +398,10 @@ def _orchestrate_body(
     cache_enabled: bool,
     cache_dir: Path | None,
     use_cache: bool,
+    source_pdf: Path,
+    source_hash: str,
+    source_map: list[int],
+    has_pages: bool,
     rate_limiter,
     target_chunk_pages: int = 0,
     progress_callback=None,
@@ -371,7 +421,26 @@ def _orchestrate_body(
         inline_footnotes=inline_footnotes,
     )
 
+    # 缓存身份稳定后的开关：源哈希缺失（极端竞态）或显式关闭时不落盘缓存。
+    cache_active = bool(
+        cache_enabled and use_cache and source_hash and cache_dir is not None
+    )
+    group_dir: Path | None = None
+    if cache_active:
+        group_dir = cache_group_dir(cache_dir, model_version, source_pdf, source_hash)
+        # 尽早写入 source.txt，便于用户在解析期间/失败后也能辨认该缓存目录。
+        write_source_marker(group_dir, source_pdf)
+
+    def cache_file_for_token(page_token: str) -> Path | None:
+        if not cache_active or group_dir is None:
+            return None
+        return group_dir / f"{page_token}.zip"
+
     if not needs_split:
+        # 整篇：无 --pages 记为 full；有 --pages 按所选页码集合描述。
+        # 局部命名避开 ``token`` 后缀，以免 pre-commit 密钥扫描正则在
+        # ``*_token = <12+ 字符>`` 上误报（describe_page_token 返回值较长）。
+        page_tag = "full" if not has_pages else describe_page_token(source_map)
         return parse_pdf_via_api(
             working_pdf,
             token,
@@ -384,6 +453,7 @@ def _orchestrate_body(
             cache_enabled=cache_enabled,
             cache_dir=cache_dir,
             use_cache=use_cache,
+            cache_file=cache_file_for_token(page_tag),
             save_zip_to_output=False,
             output_md_name=md_name,
             progress_callback=progress_callback,
@@ -416,10 +486,20 @@ def _orchestrate_body(
         if progress_callback is not None:
             progress_callback("split_done", {"total_parts": len(split_paths)})
 
+        # 片段边界（与 split_paths 一一对应）：用同一份切分逻辑推导每个片段覆盖的源页码，
+        # 从而得到稳定缓存键（与 PyMuPDF 写出字节的随机性无关）。
+        pages_per_chunk = compute_pages_per_chunk(
+            num_pages, size_bytes, page_limit, size_limit_bytes, target_chunk_pages
+        )
+        ranges = chunk_ranges(num_pages, pages_per_chunk)
+
         part_results: dict[int, Path] = {}
 
         def parse_one(idx: int, part_path: Path) -> tuple[int, Path | None]:
             with rate_limiter:
+                start, end = ranges[idx]
+                src_indices = source_map[start:end]
+                page_tag = describe_page_token(src_indices)
                 part_out = temp_dir / f"_part{idx}"
                 part_out.mkdir(parents=True, exist_ok=True)
                 ok = parse_pdf_via_api(
@@ -435,6 +515,7 @@ def _orchestrate_body(
                     cache_enabled=cache_enabled,
                     cache_dir=cache_dir,
                     use_cache=use_cache,
+                    cache_file=cache_file_for_token(page_tag),
                     save_zip_to_output=False,
                     **common_md,
                 )

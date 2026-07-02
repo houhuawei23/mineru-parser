@@ -4,7 +4,15 @@
 这些模块可独立于 Typer/Rich/日志系统使用，便于单测与复用。
 """
 
-from mineru_parser.engines.cache import get_cached_zip, save_to_cache
+from mineru_parser.engines.cache import (
+    cache_group_dir,
+    cache_zip_path,
+    compute_source_hash,
+    describe_page_token,
+    get_cached_zip,
+    save_to_cache,
+    write_source_marker,
+)
 from mineru_parser.engines.json_parser import (
     content_list_json_to_markdown,
     content_list_v2_to_markdown,
@@ -16,8 +24,13 @@ from mineru_parser.engines.markdown import (
 )
 
 __all__ = [
+    "cache_group_dir",
+    "cache_zip_path",
+    "compute_source_hash",
+    "describe_page_token",
     "get_cached_zip",
     "save_to_cache",
+    "write_source_marker",
     "content_list_json_to_markdown",
     "content_list_v2_to_markdown",
     "build_markdown_from_zip",

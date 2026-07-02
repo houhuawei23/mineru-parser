@@ -181,6 +181,45 @@ def get_pdf_info(pdf_path: Path) -> tuple[int, int]:
     return len(reader.pages), size_bytes
 
 
+def compute_pages_per_chunk(
+    num_pages: int,
+    size_bytes: int,
+    page_limit: int,
+    size_limit_bytes: int,
+    target_chunk_pages: int = 0,
+) -> int:
+    """
+    计算每个切分片段的页数（``split_pdf_*`` 与编排层共享的同一份逻辑）。
+
+    - ``target_chunk_pages > 0`` 且页数超过它：以 ``target_chunk_pages`` 为基准（自适应分片）；
+      否则以 ``page_limit`` 为基准。
+    - 若按基准页数估算的片段大小超过 ``size_limit_bytes``，按页均摊进一步收紧。
+    - 始终不超过 ``page_limit``，且至少为 1。
+
+    :return: 每片页数（>=1）
+    """
+    if target_chunk_pages > 0 and num_pages > target_chunk_pages:
+        pages = target_chunk_pages
+    else:
+        pages = page_limit
+    avg_bytes_per_page = size_bytes / num_pages if num_pages else 0
+    if avg_bytes_per_page > 0 and pages * avg_bytes_per_page > size_limit_bytes:
+        pages = max(1, int(size_limit_bytes / avg_bytes_per_page))
+    pages = min(pages, page_limit)
+    return max(1, pages)
+
+
+def chunk_ranges(num_pages: int, pages_per_chunk: int) -> list[tuple[int, int]]:
+    """
+    按 ``pages_per_chunk`` 把 ``[0, num_pages)`` 划分为半开区间列表 ``[(start, end), ...]``。
+
+    与 :func:`split_pdf_by_limits` / :func:`split_pdf_adaptive` 的切分边界完全一致，
+    供编排层推导每个片段覆盖的源页码（用于稳定缓存键）。
+    """
+    ppc = max(1, pages_per_chunk)
+    return [(s, min(s + ppc, num_pages)) for s in range(0, num_pages, ppc)]
+
+
 def split_pdf_by_limits(
     pdf_path: Path,
     page_limit: int,
@@ -209,29 +248,16 @@ def split_pdf_by_limits(
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
-
-    # 计算每片页数：优先满足页数限制，若单页均摊大小仍超限则进一步切分
-    pages_per_chunk = page_limit
-    avg_bytes_per_page = size_bytes / num_pages if num_pages else 0
-    if (
-        avg_bytes_per_page > 0
-        and pages_per_chunk * avg_bytes_per_page > size_limit_bytes
-    ):
-        pages_per_chunk = max(1, int(size_limit_bytes / avg_bytes_per_page))
+    pages_per_chunk = compute_pages_per_chunk(
+        num_pages, size_bytes, page_limit, size_limit_bytes
+    )
 
     output_paths: list[Path] = []
-    start = 0
-    chunk_idx = 0
-
-    while start < num_pages:
-        end = min(start + pages_per_chunk, num_pages)
+    for chunk_idx, (start, end) in enumerate(chunk_ranges(num_pages, pages_per_chunk)):
         out_path = temp_dir / f"{stem}_part{chunk_idx}.pdf"
         _save_page_range(pdf_path, start, end, out_path)
         output_paths.append(out_path)
         logger.debug(f"已切分: {out_path.name} (页 {start + 1}-{end})")
-
-        start = end
-        chunk_idx += 1
 
     logger.info(f"已切分为 {len(output_paths)} 个片段")
     return output_paths
@@ -269,33 +295,16 @@ def split_pdf_adaptive(
 
     temp_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
-
-    # 计算每片页数：优先使用 target_chunk_pages，再检查大小限制
-    pages_per_chunk = target_chunk_pages
-    avg_bytes_per_page = size_bytes / num_pages if num_pages else 0
-    if (
-        avg_bytes_per_page > 0
-        and pages_per_chunk * avg_bytes_per_page > size_limit_bytes
-    ):
-        pages_per_chunk = max(1, int(size_limit_bytes / avg_bytes_per_page))
-        logger.info(f"按大小限制调整每片页数为 {pages_per_chunk}")
-
-    # 同时也不能超过 page_limit
-    pages_per_chunk = min(pages_per_chunk, page_limit)
+    pages_per_chunk = compute_pages_per_chunk(
+        num_pages, size_bytes, page_limit, size_limit_bytes, target_chunk_pages
+    )
 
     output_paths: list[Path] = []
-    start = 0
-    chunk_idx = 0
-
-    while start < num_pages:
-        end = min(start + pages_per_chunk, num_pages)
+    for chunk_idx, (start, end) in enumerate(chunk_ranges(num_pages, pages_per_chunk)):
         out_path = temp_dir / f"{stem}_part{chunk_idx}.pdf"
         _save_page_range(pdf_path, start, end, out_path)
         output_paths.append(out_path)
         logger.debug(f"已切分: {out_path.name} (页 {start + 1}-{end})")
-
-        start = end
-        chunk_idx += 1
 
     logger.info(f"自适应分片完成：{len(output_paths)} 个片段")
     return output_paths

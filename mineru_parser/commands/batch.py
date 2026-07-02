@@ -228,7 +228,10 @@ def batch_cmd(
         final_summary = state.get_summary()
 
     elapsed = time.perf_counter() - start
-    console.print(render_batch_summary(final_summary, elapsed))
+    cache_root = (
+        cfg.cache_dir / model_version if cfg.cache_enabled and not rc.no_cache else None
+    )
+    console.print(render_batch_summary(final_summary, elapsed, cache_root=cache_root))
     log_run_result(
         success=failed == 0,
         elapsed=elapsed,

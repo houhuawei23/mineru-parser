@@ -54,8 +54,9 @@ def render_run_header(
     target_chunk_pages: int,
     dry_run: bool,
     log_path: Path,
+    cache_dir: Path | None = None,
 ) -> Panel:
-    """运行参数面板：输入、模型、输出、页码、分片、dry-run、日志路径。"""
+    """运行参数面板：输入、模型、输出、页码、分片、缓存、dry-run、日志路径。"""
     lines = [
         f"[bold]输入[/]: [accent]{input_path}[/]",
         f"[bold]模型[/]: {model}",
@@ -64,6 +65,8 @@ def render_run_header(
         f"[bold]自适应分片[/]: {target_chunk_pages or '仅超限切分'}",
         f"[bold]日志[/]: [muted]{log_path}[/]",
     ]
+    if cache_dir is not None:
+        lines.append(f"[bold]缓存[/]: [muted]{cache_dir}[/]")
     if dry_run:
         lines.append("[fail][DRY RUN] 模拟模式，不会实际调用 API[/]")
     return Panel(
@@ -75,7 +78,12 @@ def render_run_header(
 
 
 def render_result_panel(
-    *, success: bool, md_path: Path | None, md_len: int, elapsed: float
+    *,
+    success: bool,
+    md_path: Path | None,
+    md_len: int,
+    elapsed: float,
+    cache_dir: Path | None = None,
 ) -> Panel:
     """单次解析结果面板。"""
     if success:
@@ -84,6 +92,8 @@ def render_result_panel(
             f"Markdown: [accent]{md_path}[/]（{md_len} 字符）\n"
             f"耗时: {elapsed:.1f}s"
         )
+        if cache_dir is not None:
+            body += f"\n缓存: [muted]{cache_dir}[/]"
         return Panel(body, title="[ok]结果[/]", border_style="ok", expand=False)
     body = "[fail]✘ 解析失败[/]"
     return Panel(body, title="[fail]结果[/]", border_style="fail", expand=False)
@@ -121,14 +131,19 @@ def render_dry_run_table(
     return table
 
 
-def render_batch_summary(summary: dict[str, int], elapsed: float) -> Table:
+def render_batch_summary(
+    summary: dict[str, int], elapsed: float, cache_root: Path | None = None
+) -> Table:
     """批次状态汇总表。"""
     table = Table(title="[phase]批次结果[/]", expand=False)
     table.add_column("状态", style="accent")
     table.add_column("数量", justify="right")
     for status in ("completed", "failed", "pending", "running"):
         table.add_row(status, str(summary.get(status, 0)))
-    table.caption = f"耗时 {elapsed:.1f}s"
+    caption = f"耗时 {elapsed:.1f}s"
+    if cache_root is not None:
+        caption += f" | 缓存 {cache_root}"
+    table.caption = caption
     return table
 
 

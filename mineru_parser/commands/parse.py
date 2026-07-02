@@ -22,6 +22,7 @@ from mineru_parser.console import (
     RichProgressReporter,
 )
 from mineru_parser.core.orchestrator import orchestrate_parse
+from mineru_parser.engines.cache import cache_group_dir, compute_source_hash
 from mineru_parser.engines.utils import resolve_input_to_pdf
 from mineru_parser.logging_setup import log_run_result
 from mineru_parser.models.params import ParseParams, RunContext
@@ -131,6 +132,18 @@ def parse_cmd(
         target_chunk_pages if target_chunk_pages is not None else cfg.target_chunk_pages
     )
 
+    # 计算该 PDF 的缓存组目录路径（用于在运行头/结果面板展示，便于用户进入查看）。
+    # 仅在启用缓存时计算；compute_source_hash 按 mtime/size 复用，开销可忽略。
+    cache_group: Path | None = None
+    if cfg.cache_enabled and not rc.no_cache:
+        try:
+            source_hash = compute_source_hash(pdf_path, cfg)
+            cache_group = cache_group_dir(
+                cfg.cache_dir, model_version, pdf_path, source_hash
+            )
+        except FileNotFoundError:
+            cache_group = None
+
     params = ParseParams(
         pdf_path=pdf_path,
         token=token or cfg.token,
@@ -158,6 +171,7 @@ def parse_cmd(
             target_chunk_pages=chunk_pages,
             dry_run=rc.dry_run,
             log_path=rc.log_path,
+            cache_dir=cache_group,
         )
     )
 
@@ -174,7 +188,11 @@ def parse_cmd(
     if markdown:
         console.print(
             render_result_panel(
-                success=True, md_path=md_path, md_len=len(markdown), elapsed=elapsed
+                success=True,
+                md_path=md_path,
+                md_len=len(markdown),
+                elapsed=elapsed,
+                cache_dir=cache_group,
             )
         )
         log_run_result(True, md_path, elapsed)

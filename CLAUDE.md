@@ -107,7 +107,7 @@ ThreadPoolExecutor(batch_concurrency) → N × orchestrate_parse()
 
 **Markdown (engines/markdown.py)** — `build_markdown_from_zip()`, `regenerate_markdown_from_json()`, `merge_markdown_parts()`.
 
-**Image / Cache / State / JSON** (engines/) — unchanged engines; cache is content-addressed (SHA256), state is SQLite (WAL) with `try_start_job()` atomic claim.
+**Image / Cache / State / JSON** (engines/) — engines; cache is keyed on source-PDF SHA256 + source page set (`compute_source_hash`/`describe_page_token`/`cache_zip_path`, grouped per source PDF), state is SQLite (WAL) with `try_start_job()` atomic claim.
 
 **Concurrency note**: there is NO global semaphore anymore. `RunContext.rate_limiter` (a `threading.Semaphore(cfg.api_rate_limit)`) is constructed once in `main_callback` and shared by `orchestrate_parse` (fragments) and `run_batch` (files).
 
@@ -157,9 +157,20 @@ The API module uses `requests.Session()` with connection pooling for better perf
 
 ### Caching
 - Enabled by default, disable with `--no-cache`
-- Uses MD5 hash of PDF content as cache key
-- Hash results are memoized with LRU cache (auto-invalidates on file modification)
+- **Cache identity = SHA256 of the *source* PDF content + the source page set** (not the bytes of split/extracted temp files — PyMuPDF `save()` embeds a random `/ID` each write, so fragment bytes are non-deterministic and would bust the cache). See `engines/cache.py:compute_source_hash` / `describe_page_token`.
+- All fragments of one source PDF are grouped under a single directory so they're easy to browse/manage:
+  ```
+  <cache_dir>/<model>/<safe_stem>_<hash8>/
+      full.zip        # whole doc, unsplit
+      p1-50.zip       # split fragment (contiguous)
+      p10-20.zip      # --pages subset (contiguous)
+      h<12hex>.zip    # non-contiguous page set (--pages 1-3,7)
+      source.txt      # records the source filename for human inspection
+  ```
+  Layout helpers: `cache_group_dir`, `cache_zip_path`. The orchestrator computes the per-fragment cache path from `(source_pdf, source_hash, page_token)` and passes it as `cache_file` into `parse_pdf_via_api`.
+- `compute_source_hash` is memoized via LRU (auto-invalidates on file mtime/size change)
 - Cached results skip API calls entirely
+- The per-PDF cache group dir is shown in the `parse` run header and result panel (Problem 3: easy to `cd` in and inspect the raw zips)
 
 ### Page Range Selection
 - The `--pages` option uses 1-based indexing in CLI, converted to 0-based internally
@@ -191,6 +202,7 @@ Tests are in the `test/` directory using pytest:
 - `test_json_parser.py`: JSON parsing
 - `test_image_processor.py`: Image processing
 - `test_api.py`: Core HTTP transport (api_client) + connection pooling (http) + retries
+- `test_orchestrator.py`: `orchestrate_parse` split-cache round-trip (write→hit, `--no-cache`, source marker)
 - `test_cli.py`: CLI commands via `main.app` (parse, batch, from-json; real `RootConfig`)
 - `test_cache.py`: Cache and hash memoization tests
 - `test_state.py`: Batch state management (resume, atomic claim) tests
