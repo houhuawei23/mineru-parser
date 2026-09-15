@@ -71,12 +71,18 @@ def parse_cmd(
         help="覆盖配置（YAML）；优先级高于主命令 -c",
     ),
     force: bool = typer.Option(False, "-f", "--force", help="强制覆盖已存在的输出目录"),
+    no_cache: bool = typer.Option(
+        False, "--no-cache", help="禁用缓存，强制重新调用 API 解析"
+    ),
 ) -> None:
     """解析单个 PDF 或 URL。"""
     rc: RunContext = ctx.obj
     resolve_subcommand_config(rc, config_path)
     cfg = rc.config
     validate_token(token or cfg.token)
+
+    # 子命令 --no-cache 与全局 --no-cache 取并集
+    disable_cache = rc.no_cache or no_cache
 
     # 判断 URL 还是本地文件，并推导输出目录与 md 文件名
     s = str(input_path)
@@ -135,7 +141,7 @@ def parse_cmd(
     # 计算该 PDF 的缓存组目录路径（用于在运行头/结果面板展示，便于用户进入查看）。
     # 仅在启用缓存时计算；compute_source_hash 按 mtime/size 复用，开销可忽略。
     cache_group: Path | None = None
-    if cfg.cache_enabled and not rc.no_cache:
+    if cfg.cache_enabled and not disable_cache:
         try:
             source_hash = compute_source_hash(pdf_path, cfg)
             cache_group = cache_group_dir(
@@ -155,7 +161,7 @@ def parse_cmd(
         max_wait=cfg.max_wait,
         cache_enabled=cfg.cache_enabled,
         cache_dir=cfg.cache_dir,
-        use_cache=not rc.no_cache,
+        use_cache=not disable_cache,
         pages_spec=pages,
         target_chunk_pages=chunk_pages,
         output_md_name=md_name,

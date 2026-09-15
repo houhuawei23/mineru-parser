@@ -95,7 +95,11 @@ def test_split_pdf_cache_roundtrip(tmp_path: Path) -> None:
 
     def fake_apply(*a, **kw):
         api_calls["apply"] += 1
-        return {"batch_id": "bid", "file_urls": ["http://upload"]}
+        return {
+            "batch_id": "bid",
+            "file_urls": ["http://upload"],
+            "upload_headers": [{"Content-Type": "application/pdf"}],
+        }
 
     def fake_download(*a, **kw):
         api_calls["download"] += 1
@@ -153,7 +157,11 @@ def test_no_cache_disables_writes(tmp_path: Path) -> None:
     with (
         patch(
             f"{_ORCH}.apply_upload_urls",
-            return_value={"batch_id": "b", "file_urls": ["u"]},
+            return_value={
+                "batch_id": "b",
+                "file_urls": ["u"],
+                "upload_headers": [{"Content-Type": "application/pdf"}],
+            },
         ),
         patch(f"{_ORCH}.upload_file_to_url", return_value=True),
         patch(f"{_ORCH}.poll_batch_result", return_value={"full_zip_url": "x"}),
@@ -181,7 +189,11 @@ def test_source_marker_written(tmp_path: Path) -> None:
     with (
         patch(
             f"{_ORCH}.apply_upload_urls",
-            return_value={"batch_id": "b", "file_urls": ["u"]},
+            return_value={
+                "batch_id": "b",
+                "file_urls": ["u"],
+                "upload_headers": [{"Content-Type": "application/pdf"}],
+            },
         ),
         patch(f"{_ORCH}.upload_file_to_url", return_value=True),
         patch(f"{_ORCH}.poll_batch_result", return_value={"full_zip_url": "x"}),

@@ -32,7 +32,11 @@ def apply_upload_urls(
     timeout: int,
     session: requests.Session | None = None,
 ) -> dict | None:
-    """申请文件上传链接。返回 ``{"batch_id": "...", "file_urls": [...]}`` 或 ``None``。"""
+    """申请文件上传链接。
+
+    返回 ``{"batch_id": "...", "file_urls": [...], "upload_headers": [...]}``
+    或 ``None``。``upload_headers`` 为每个文件对应的 OSS 签名请求头，上传时必须原样携带。
+    """
     url = f"{base_url}/file-urls/batch"
     data = {"files": [{"name": file_name}], "model_version": model_version}
     _session = session or get_session()
@@ -55,7 +59,12 @@ def apply_upload_urls(
         if not batch_id or not file_urls:
             logger.error("响应中缺少 batch_id 或 file_urls")
             return None
-        return {"batch_id": batch_id, "file_urls": file_urls}
+        upload_headers = data_obj.get("headers") or []
+        return {
+            "batch_id": batch_id,
+            "file_urls": file_urls,
+            "upload_headers": upload_headers,
+        }
     except requests.RequestException as e:
         logger.error(f"申请上传链接异常: {e}")
         return None
@@ -66,15 +75,25 @@ def upload_file_to_url(
     upload_url: str,
     timeout: int,
     session: requests.Session | None = None,
+    upload_headers: dict[str, str] | None = None,
 ) -> bool:
-    """将本地 PDF 用 PUT 上传到 ``upload_url``。"""
+    """将本地 PDF 用 PUT 上传到 ``upload_url``。
+
+    :param upload_headers: OSS 签名请求头，必须与 ``upload_url`` 一一对应，
+        否则 OSS 会返回 403 SignatureDoesNotMatch。
+    """
     if not pdf_path.exists():
         logger.error(f"文件不存在: {pdf_path}")
         return False
     _session = session or get_session()
     try:
         with open(pdf_path, "rb") as f:
-            resp = _session.put(upload_url, data=f, timeout=timeout)
+            resp = _session.put(
+                upload_url,
+                data=f,
+                headers=upload_headers or {},
+                timeout=timeout,
+            )
         if resp.status_code != 200:
             logger.error(f"上传失败: HTTP {resp.status_code}")
             return False

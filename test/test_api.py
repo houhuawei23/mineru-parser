@@ -70,7 +70,37 @@ class TestApplyUploadUrls:
     """测试 apply_upload_urls 函数。"""
 
     def test_success_returns_batch_info(self) -> None:
-        """验证成功时返回 batch_id 和 file_urls。"""
+        """验证成功时返回 batch_id、file_urls 与 upload_headers。"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "code": 0,
+            "data": {
+                "batch_id": "batch_123",
+                "file_urls": ["https://upload.example.com/1"],
+                "headers": [{"Content-Type": "application/pdf"}],
+            },
+        }
+
+        mock_session = Mock()
+        mock_session.post.return_value = mock_response
+
+        result = apply_upload_urls(
+            token="test_token",
+            base_url="https://api.example.com",
+            file_name="test.pdf",
+            model_version="vlm",
+            timeout=30,
+            session=mock_session,
+        )
+
+        assert result is not None
+        assert result["batch_id"] == "batch_123"
+        assert result["file_urls"] == ["https://upload.example.com/1"]
+        assert result["upload_headers"] == [{"Content-Type": "application/pdf"}]
+
+    def test_missing_headers_returns_empty_list(self) -> None:
+        """验证旧版响应无 headers 字段时兼容返回空列表。"""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -94,8 +124,7 @@ class TestApplyUploadUrls:
         )
 
         assert result is not None
-        assert result["batch_id"] == "batch_123"
-        assert result["file_urls"] == ["https://upload.example.com/1"]
+        assert result["upload_headers"] == []
 
     def test_http_error_returns_none(self) -> None:
         """验证 HTTP 错误时返回 None。"""
@@ -186,7 +215,31 @@ class TestUploadFileToUrl:
     """测试 upload_file_to_url 函数。"""
 
     def test_success_returns_true(self, tmp_path: Path) -> None:
-        """验证成功上传返回 True。"""
+        """验证成功上传返回 True，且 OSS 请求头被转发。"""
+        pdf_path = tmp_path / "test.pdf"
+        pdf_path.write_bytes(b"fake pdf content")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+
+        mock_session = Mock()
+        mock_session.put.return_value = mock_response
+
+        result = upload_file_to_url(
+            pdf_path=pdf_path,
+            upload_url="https://upload.example.com/1",
+            timeout=60,
+            session=mock_session,
+            upload_headers={"Content-Type": "application/pdf"},
+        )
+
+        assert result is True
+        mock_session.put.assert_called_once()
+        call = mock_session.put.call_args
+        assert call.kwargs.get("headers") == {"Content-Type": "application/pdf"}
+
+    def test_success_without_headers_returns_true(self, tmp_path: Path) -> None:
+        """验证未提供上传请求头时仍返回 True（兼容旧行为）。"""
         pdf_path = tmp_path / "test.pdf"
         pdf_path.write_bytes(b"fake pdf content")
 
@@ -204,6 +257,9 @@ class TestUploadFileToUrl:
         )
 
         assert result is True
+        mock_session.put.assert_called_once()
+        call = mock_session.put.call_args
+        assert call.kwargs.get("headers") == {}
 
     def test_missing_file_returns_false(self, tmp_path: Path) -> None:
         """验证文件不存在时返回 False。"""

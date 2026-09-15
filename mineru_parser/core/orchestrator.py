@@ -149,6 +149,7 @@ def parse_pdf_via_api(
         return None
     batch_id = apply_result["batch_id"]
     file_urls = apply_result["file_urls"]
+    upload_headers = apply_result.get("upload_headers") or []
     logger.info(f"batch_id: {batch_id}")
     if progress_callback is not None:
         progress_callback("upload", {"batch_id": batch_id})
@@ -156,7 +157,11 @@ def parse_pdf_via_api(
     # 上传
     t0 = time.perf_counter()
     if not upload_file_to_url(
-        pdf_path, file_urls[0], config.request_timeout_upload, session=_session
+        pdf_path,
+        file_urls[0],
+        config.request_timeout_upload,
+        session=_session,
+        upload_headers=upload_headers[0] if upload_headers else None,
     ):
         if progress_callback is not None:
             progress_callback("error", {"error": "上传文件失败"})

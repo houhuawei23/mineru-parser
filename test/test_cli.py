@@ -12,8 +12,10 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 import mineru_parser
+from mineru_parser.core.result import ParseResult
 from mineru_parser.main import app
 from mineru_parser.models.config import ApiConfig, CacheConfig, RootConfig
+from mineru_parser.models.params import ParseParams
 
 runner = CliRunner()
 
@@ -120,6 +122,37 @@ class TestParseCommand:
         assert result.exit_code == 0
         assert "解析成功" in result.output
 
+    def test_parse_no_cache_disables_cache(self, tmp_path: Path) -> None:
+        """parse --no-cache 应传入 use_cache=False。"""
+        pdf = tmp_path / "paper.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
+        with patch(
+            "mineru_parser.commands.parse.orchestrate_parse", return_value="# Markdown"
+        ) as mock_orch:
+            result = _invoke(["parse", "--no-cache", str(pdf)], tmp_path)
+        assert result.exit_code == 0
+        params = mock_orch.call_args.args[0]
+        assert isinstance(params, ParseParams)
+        assert params.use_cache is False
+
+    def test_parse_global_no_cache_still_works(self, tmp_path: Path) -> None:
+        """全局 --no-cache parse 仍保持向后兼容。"""
+        pdf = tmp_path / "paper.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
+        with patch(
+            "mineru_parser.commands.parse.orchestrate_parse", return_value="# Markdown"
+        ) as mock_orch:
+            result = _invoke(["--no-cache", "parse", str(pdf)], tmp_path)
+        assert result.exit_code == 0
+        params = mock_orch.call_args.args[0]
+        assert isinstance(params, ParseParams)
+        assert params.use_cache is False
+
+    def test_parse_help_shows_no_cache(self, tmp_path: Path) -> None:
+        result = _invoke(["parse", "--help"], tmp_path)
+        assert result.exit_code == 0
+        assert "--no-cache" in result.output
+
     def test_parse_failure_exits_error(self, tmp_path: Path) -> None:
         pdf = tmp_path / "paper.pdf"
         pdf.write_bytes(b"%PDF-1.4")
@@ -163,6 +196,34 @@ class TestBatchCommand:
         # 不依赖列宽折叠：caption 含文件数，汇总行含总页数 2*10
         assert "文件数 2" in result.output
         assert "20" in result.output
+
+    def test_batch_no_cache_disables_cache(self, tmp_path: Path) -> None:
+        """batch --no-cache 应传入 use_cache=False。"""
+        pdfs_dir = tmp_path / "pdfs"
+        pdfs_dir.mkdir()
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (pdfs_dir / "a.pdf").write_bytes(b"%PDF-1.4")
+        with (
+            patch("mineru_parser.commands.batch.get_pdf_info", return_value=(1, 1024)),
+            patch(
+                "mineru_parser.commands.batch.run_batch",
+                return_value=[ParseResult(pdf_path=pdfs_dir / "a.pdf", success=True)],
+            ) as mock_run,
+        ):
+            result = _invoke(
+                ["batch", "--no-cache", "-i", str(pdfs_dir), "-o", str(out_dir)],
+                tmp_path,
+            )
+        assert result.exit_code == 0
+        params = mock_run.call_args.args[0][0]
+        assert isinstance(params, ParseParams)
+        assert params.use_cache is False
+
+    def test_batch_help_shows_no_cache(self, tmp_path: Path) -> None:
+        result = _invoke(["batch", "--help"], tmp_path)
+        assert result.exit_code == 0
+        assert "--no-cache" in result.output
 
 
 # ==================== from-json ====================
