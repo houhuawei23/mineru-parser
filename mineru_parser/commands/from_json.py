@@ -7,7 +7,7 @@ from pathlib import Path
 import typer
 
 from mineru_parser.commands._shared import build_md_options, resolve_subcommand_config
-from mineru_parser.console import console, render_error, render_result_panel
+from mineru_parser.console import console, print_error, render_result_panel
 from mineru_parser.engines.markdown import regenerate_markdown_from_json
 from mineru_parser.logging_setup import log_run_result
 from mineru_parser.models.params import RunContext
@@ -33,7 +33,7 @@ def from_json_cmd(
     rc: RunContext = ctx.obj
     resolve_subcommand_config(rc, config_path)
     if not input_dir.is_dir():
-        console.print(render_error(f"目录不存在: {input_dir}"))
+        print_error(f"目录不存在: {input_dir}", quiet=rc.quiet)
         log_run_result(False, None, 0.0)
         raise typer.Exit(1)
 
@@ -57,6 +57,6 @@ def from_json_cmd(
         )
         log_run_result(True, out_path, 0.0)
     else:
-        console.print(render_error("未找到有效的 content_list JSON 文件"))
+        print_error("未找到有效的 content_list JSON 文件", quiet=rc.quiet)
         log_run_result(False, None, 0.0)
         raise typer.Exit(1)

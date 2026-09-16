@@ -14,6 +14,7 @@ import requests
 from loguru import logger
 
 from mineru_parser.core.http import get_session
+from mineru_parser.errors import ParseError
 
 
 def get_headers(token: str) -> dict[str, str]:
@@ -112,11 +113,15 @@ def poll_batch_result(
     timeout: int,
     session: requests.Session | None = None,
     progress_callback=None,
-) -> dict | None:
-    """轮询批量任务结果，直到 ``state=done``、失败或超时。"""
+) -> dict:
+    """轮询批量任务结果，直到 ``state=done``。
+
+    失败或超时抛出 :class:`ParseError`（携带服务端 ``err_msg``），成功返回结果 dict。
+    """
     url = f"{base_url}/extract-results/batch/{batch_id}"
     _session = session or get_session()
     start = time.time()
+    last_state = ""
     while time.time() - start < max_wait:
         try:
             resp = _session.get(url, headers=get_headers(token), timeout=timeout)
@@ -133,15 +138,17 @@ def poll_batch_result(
                 continue
             first = results[0]
             state = first.get("state", "")
+            last_state = state
             if state == "done":
                 zip_url = first.get("full_zip_url")
                 if zip_url:
                     return first
                 logger.error("state=done 但无 full_zip_url")
-                return None
+                raise ParseError("state=done 但返回结果缺少 full_zip_url")
             if state == "failed":
-                logger.error(f"解析失败: {first.get('err_msg', '未知原因')}")
-                return None
+                err_msg = first.get("err_msg") or "未知原因"
+                logger.error(f"解析失败: {err_msg}")
+                raise ParseError(f"解析失败: {err_msg}")
             progress = first.get("extract_progress", {})
             poll_info: dict = {"state": state, "elapsed": time.time() - start}
             if progress:
@@ -157,7 +164,7 @@ def poll_batch_result(
             logger.warning(f"轮询异常: {e}")
             time.sleep(poll_interval)
     logger.error("轮询超时")
-    return None
+    raise ParseError(f"解析超时（等待 {max_wait}s，最后状态: {last_state or '未知'}）")
 
 
 def download_zip(

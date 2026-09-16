@@ -93,3 +93,22 @@ graph TD
         assert "graph TD" in result
         assert "<details>" not in result
         assert "</details>" not in result
+
+
+def test_process_images_custom_dir_name() -> None:
+    """images_dir_name="pics"：图片写入 pics/ 且引用随之更新。"""
+    with tempfile.TemporaryDirectory() as d:
+        temp_dir = Path(d) / "temp"
+        out_dir = Path(d) / "out"
+        temp_dir.mkdir()
+        out_dir.mkdir()
+        img_path = temp_dir / "test.jpg"
+        Image.new("RGB", (10, 10), color="red").save(img_path, "JPEG")
+
+        result = process_images(
+            "![Caption](test.jpg)", temp_dir, out_dir, images_dir_name="pics"
+        )
+
+        assert "![image_01](pics/image_01.png)" in result
+        assert (out_dir / "pics" / "image_01.png").exists()
+        assert not (out_dir / "images").exists()

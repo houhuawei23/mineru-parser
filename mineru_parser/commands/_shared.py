@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 
-from mineru_parser.console import console, render_error
-from mineru_parser.errors import TokenError
+from mineru_parser.console import print_error
+from mineru_parser.logging_setup import log_run_result
 from mineru_parser.models.config import RootConfig
 from mineru_parser.models.params import RunContext
 
@@ -25,25 +26,29 @@ def resolve_subcommand_config(rc: RunContext, config_path: Path | None) -> RunCo
     try:
         rc.config = load_config(config_path)
     except Exception as e:  # ConfigError
-        console.print(render_error(str(e)))
+        print_error(str(e), quiet=rc.quiet)
         raise typer.Exit(1) from e
     return rc
 
 
-def validate_token(token: str) -> None:
-    """校验 API Token，缺失时渲染错误并退出。"""
-    if not token:
-        console.print(
-            render_error(
-                "未配置 API Token。请通过以下方式之一设置：\n"
-                "  1) 在 config.yml / default_config.yml / -c 配置中设置 api.token\n"
-                "  2) 设置环境变量 MINERU_TOKEN\n"
-                "  3) 使用 -t/--token 传入"
-            )
+def validate_token(token: str, *, quiet: bool = False) -> None:
+    """校验 API Token，缺失或空白时输出错误并退出。"""
+    if not token or not token.strip():
+        print_error(
+            "未配置 API Token。请通过以下方式之一设置：\n"
+            "  1) 在 config.yml / default_config.yml / -c 配置中设置 api.token\n"
+            "  2) 设置环境变量 MINERU_TOKEN\n"
+            "  3) 使用 -t/--token 传入",
+            quiet=quiet,
         )
         raise typer.Exit(1)
-    if not token.strip():
-        raise TokenError("token 为空白")
+
+
+def fail_run(msg: str, rc: RunContext, elapsed: float = 0.0) -> NoReturn:
+    """输出失败原因（stderr，quiet 感知）、记录运行结果并以退出码 1 终止。"""
+    print_error(msg, quiet=rc.quiet)
+    log_run_result(False, None, elapsed)
+    raise typer.Exit(1)
 
 
 def build_md_options(

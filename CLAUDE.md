@@ -92,12 +92,14 @@ ThreadPoolExecutor(batch_concurrency) → N × orchestrate_parse()
 ### Key Components
 
 **Core orchestration (core/orchestrator.py)**
-- `orchestrate_parse(params, ctx)`: Single PDF with auto-split (collapsed from the old 25-positional-arg signature into `ParseParams`); uses `ctx.rate_limiter` for fragment concurrency.
-- `parse_pdf_via_api()`: Single fragment upload→poll→download→build with caching (unchanged signature).
-- `_clean_output_dir()`: Keeps only `*.md` + `images/`.
+- `orchestrate_parse(params, ctx)`: Single PDF with auto-split (collapsed from the old 25-positional-arg signature into `ParseParams`); uses `ctx.rate_limiter` for fragment concurrency. **Raises `ParseError` on failure** (success returns the Markdown string — the old `str | None` contract is gone since v2.2.0); split-path failures carry the fragment failure count and first error message.
+- `parse_pdf_via_api()`: Single fragment upload→poll→download→build with caching; raises `ParseError` on any failure (poll's server-side `err_msg` propagates).
+- `_clean_output_dir()`: Keeps only `*.md` + `images/` (or the configured images dir).
 
 **Core transport (core/api_client.py + core/http.py)**
 - `apply_upload_urls`, `upload_file_to_url`, `poll_batch_result`, `download_zip` (download has `allow_insecure_fallback`, no global warning suppression).
+- `poll_batch_result` **raises `ParseError`** on `state=failed` (with the server `err_msg`), on timeout, and on `done`-without-`full_zip_url` — it never returns `None` anymore.
+- `engines/pdf_splitter.py:validate_pdf(path) -> str | None`: preflight (size, `%PDF` magic bytes, openable with >0 pages) — wired into `parse` and `batch` before any network call.
 - `get_session()`/`close_session()`: thread-local `requests.Session()` with `HTTPAdapter` pooling; `atexit`-registered cleanup.
 
 **Core batch (core/batch.py)**
@@ -185,13 +187,21 @@ The API module uses `requests.Session()` with connection pooling for better perf
 ### Batch Resume Capability
 - Use `--resume` to continue an interrupted batch job
 - Tracks job state in SQLite database (`.mineru_batch_state.db`)
+- **Disk-first skip**: with `--resume`, a file whose output md (`<out>/<stem>/<stem>.md`) already exists and is non-empty is skipped and reconciled to COMPLETED — disk truth is checked before the state db (global `-f/--force` forces reprocessing)
+- **Per-job state write-back**: `on_complete` updates the state db from the worker thread as each file finishes — a crash no longer leaves jobs stuck in RUNNING
+- **Stale-RUNNING reclaim**: `BatchStateManager.reclaim_stale_running(cfg.batch_stale_running_hours)` (default 6h) marks crashed RUNNING jobs as retryable FAILED on `--resume` startup
 - Skips completed files, retries failed files (up to 3 attempts)
 - Use `--reset-failed` to reset failed jobs and retry them
+- **Batch output layout (v2.2.0, breaking)**: `<out>/<stem>/<stem>.md` — no more `<stem>_parsed/` nesting; `output.parsed_suffix` remains only for `parse -o <file.md>`
 
 ### Image Handling
 - Only images referenced in Markdown are kept
 - All images are renamed to `image_XX.png` format
-- Images are stored in `{output_dir}/images/`
+- Images are stored in `{output_dir}/images/` — the directory name is configurable via `output.images_dir` (honored on ALL paths since v2.2.0, including the single-PDF build path; validated to be a single path segment)
+
+### Error Reporting
+- Command-layer errors go to **stderr** via `console.print_error(msg, quiet=...)` — renders a Rich panel normally, a single plain line under `-q` (quiet mode still shows the failure reason)
+- `commands/_shared.py:fail_run(msg, rc, elapsed)` is the shared failure exit helper (print → `log_run_result` → `typer.Exit(1)`); exit codes stay binary 0/1
 
 ## Testing Structure
 

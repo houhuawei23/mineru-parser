@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.2.0 (2026-09-15)
+
+基于批量下载论文实战复盘（download-papers-playbook §四）的四阶段改进。
+
+### Breaking Changes
+
+- **batch 输出布局**：`<out>/<stem>_parsed/<stem>.md` → `<out>/<stem>/<stem>.md`，
+  与 `parse` 默认布局对齐，消除「目录套目录」。旧 `*_parsed/` 目录不会被删除；
+  配合 `--resume` 时因新路径无输出会自动重新解析到新位置（一次性成本）。
+
+### Bug Fixes
+
+- **崩溃不再卡死 `--resume`**：任务状态改为每文件完成时即时回写（`on_complete` 内），
+  进程中断不再遗留 RUNNING；`--resume` 启动时还会回收超过
+  `batch.stale_running_hours`（新增配置，默认 6 小时）的陈旧 RUNNING 任务。
+- **纯空白 token 不再抛裸 traceback**：与缺失 token 同样渲染错误面板并以码 1 退出。
+- **`batch -o` 指向不存在的目录不再崩溃**：打开状态库前先创建输出目录。
+- **`output.images_dir` 在单文件路径生效**：原先 `process_images` 硬编码 `images/`
+  导致配置被忽略；现全路径透传，并新增校验（必须是单路径段）。
+- **quiet 模式失败原因可见**：错误统一输出到 stderr（`print_error`），
+  `-q` 下为单行纯文本，不再被进度报告器吞掉。
+
+### Features
+
+- **PDF 预检**（`validate_pdf`）：解析/批量前校验文件非空、含 `%PDF` 头、可打开且页数 > 0；
+  HTML 伪装的 .pdf 毫秒级报错，不再上传后数分钟才发现。batch 中无效文件警告跳过。
+- **解析失败原因透传**：`poll_batch_result` 失败/超时抛 `ParseError`（携带服务端
+  `err_msg`），`orchestrate_parse` 失败改为抛异常（成功返回 str），CLI 退出码 1
+  且终端/日志显示具体原因而非「解析失败或超时」。退出码保持 0/1 二元。
+- **batch 磁盘级断点跳过**：`--resume` 时输出 md 已存在且非空的文件自动跳过
+  （磁盘真值先于状态库），全局 `-f` 强制重跑；汇总显示跳过数。
+- **分块进度补全**：补发 `part_start` 事件，切分解析时可见每个在途片段。
+
+
 ## v2.1.0 (2026-07-02)
 
 ### Bug Fixes

@@ -18,7 +18,7 @@ from mineru_parser import __version__
 from mineru_parser.commands.batch import batch_cmd
 from mineru_parser.commands.from_json import from_json_cmd
 from mineru_parser.commands.parse import parse_cmd
-from mineru_parser.console import console, render_error
+from mineru_parser.console import console, print_error
 from mineru_parser.errors import ConfigError
 from mineru_parser.logging_setup import (
     build_run_log_path,
@@ -78,7 +78,7 @@ def main_callback(
     try:
         cfg = load_config(config_path)
     except ConfigError as e:
-        console.print(render_error(str(e)))
+        print_error(str(e), quiet=quiet)
         raise typer.Exit(1) from e
 
     log_path, started = build_run_log_path(cfg.cache_dir / "logs")

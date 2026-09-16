@@ -75,7 +75,8 @@ markdown:
 
 # ==================== 输出与路径 ====================
 output:
-  # 解析输出目录后缀，输入 xx.pdf 时输出目录为 xx_parsed
+  # 输出目录后缀：仅用于 `parse -o <file.md>` 场景（输出目录为 <stem>_parsed）。
+  # batch 与 parse 默认布局为 <stem>/（自 v2.2.0 起 batch 不再加此后缀）
   parsed_suffix: "_parsed"
   # zip 缓存文件名后缀
   zip_suffix: "_parsed.zip"

@@ -121,3 +121,25 @@ def test_render_error_panel() -> None:
     with console.capture() as cap:
         console.print(render_error("something broke"))
     assert "something broke" in cap.get()
+
+
+# ==================== print_error（stderr 输出） ====================
+
+
+class TestPrintError:
+    def test_print_error_writes_panel_to_stderr(self, capsys) -> None:
+        from mineru_parser.console import print_error
+
+        print_error("bad input")
+        err = capsys.readouterr().err
+        assert "bad input" in err
+        assert "错误" in err  # 面板标题
+
+    def test_print_error_quiet_single_line_to_stderr(self, capsys) -> None:
+        """quiet 模式：stderr 仅一行纯文本，无面板框线。"""
+        from mineru_parser.console import print_error
+
+        print_error("解析失败: 原因X", quiet=True)
+        err = capsys.readouterr().err
+        assert "解析失败: 原因X" in err
+        assert "╭" not in err  # 无 Panel 边框

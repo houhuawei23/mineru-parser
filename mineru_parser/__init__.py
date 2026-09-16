@@ -8,7 +8,7 @@ MinerU PDF 解析器：将 PDF 解析为 Markdown，支持页眉、页脚、页�
 - config: 配置加载
 """
 
-__version__ = "2.0.0"
+__version__ = "2.2.0"
 
 from mineru_parser.models.config import ConfigError, RootConfig as Config, load_config
 from mineru_parser.models.params import ParseParams, RunContext

@@ -164,6 +164,46 @@ def extract_pages_to_pdf(
     _save_page_indices(src, page_indices_0based, dest)
 
 
+def validate_pdf(pdf_path: Path) -> str | None:
+    """
+    预检 PDF 文件有效性：有效返回 ``None``，否则返回中文错误信息。
+
+    依次检查：文件存在且非空 → 前 1024 字节含 ``%PDF`` 头 → 能打开且页数 > 0。
+    供命令层在任何网络调用前拦截损坏/伪装成 .pdf 的文件（如反爬站点返回的 HTML）。
+    """
+    if not pdf_path.exists():
+        return f"文件不存在: {pdf_path}"
+    try:
+        if pdf_path.stat().st_size <= 0:
+            return f"文件为空: {pdf_path}"
+    except OSError as e:
+        return f"无法读取文件: {pdf_path}（{e}）"
+
+    try:
+        with open(pdf_path, "rb") as f:
+            head = f.read(1024)
+    except OSError as e:
+        return f"无法读取文件: {pdf_path}（{e}）"
+    if b"%PDF" not in head:
+        return f"不是有效的 PDF 文件（缺少 %PDF 头，可能是 HTML 或其他伪装内容）: {pdf_path}"
+
+    try:
+        if _HAS_FITZ:
+            doc = fitz.open(str(pdf_path))
+            try:
+                if doc.page_count < 1:
+                    return f"不是有效的 PDF 文件（页数为 0）: {pdf_path}"
+            finally:
+                doc.close()
+        else:
+            reader = PdfReader(str(pdf_path))
+            if len(reader.pages) < 1:
+                return f"不是有效的 PDF 文件（页数为 0）: {pdf_path}"
+    except Exception as e:
+        return f"不是有效的 PDF 文件（无法解析页数: {e}）: {pdf_path}"
+    return None
+
+
 def get_pdf_info(pdf_path: Path) -> tuple[int, int]:
     """
     获取 PDF 页数和文件大小。

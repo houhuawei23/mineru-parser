@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -102,6 +103,19 @@ def render_result_panel(
 def render_error(msg: str) -> Panel:
     """错误面板。"""
     return Panel(msg, title="[fail]错误[/]", border_style="fail", expand=False)
+
+
+def print_error(msg: str, *, quiet: bool = False) -> None:
+    """错误输出到 stderr：常规模式渲染错误面板；quiet 模式输出单行纯文本。
+
+    每次调用时解析 ``sys.stderr``（而非 import 时固定），保证测试可捕获；
+    与主 ``console`` 分离，保证 ``-q`` 下失败原因仍然可见。
+    """
+    err_console = Console(theme=_THEME, highlight=False, file=sys.stderr)
+    if quiet:
+        err_console.print(msg)
+    else:
+        err_console.print(render_error(msg))
 
 
 def render_dry_run_table(

@@ -182,6 +182,20 @@ mineru-parse from-json --help
 | `--target-chunk-pages` | 自适应分片目标页数（0=仅超限切分，>0=始终切分到此大小） |
 | `-f, --force` | 强制覆盖已存在的输出目录 |
 
+### batch 输出布局
+
+自 v2.2.0 起，batch 输出与 `parse` 默认布局对齐：`<out>/<pdf_stem>/<pdf_stem>.md`
+（不再多一层 `<stem>_parsed/` 嵌套）。旧的 `*_parsed/` 目录不会被删除或迁移；
+配合 `--resume` 时，因新路径下无输出文件会自动重新解析到新位置（一次性成本）。
+
+### batch 断点与跳过
+
+- `--resume`：优先看磁盘——目标输出 md 已存在且非空则跳过（并同步状态库）；
+  状态库中上次崩溃遗留的 RUNNING 任务超过 `batch.stale_running_hours`（默认 6 小时）
+  会被自动回收为可重试。
+- `-f/--force`（全局）：配合 `--resume` 可强制重新解析已有输出的文件。
+- 每个文件完成即回写状态，进程中断不再遗留 RUNNING。
+
 ### batch 命令参数
 
 | 参数 | 说明 |
@@ -191,7 +205,7 @@ mineru-parse from-json --help
 | `-r, --recursive` | 递归处理子目录 |
 | `-I, --include` | 包含的文件模式 |
 | `-E, --exclude` | 排除的文件模式（正则） |
-| `--resume` | 断点续传模式 |
+| `--resume` | 断点续传模式：跳过已完成与已有输出的文件 |
 | `--reset-failed` | 重置失败任务状态 |
 | `--concurrency` | 并发处理文件数（默认从配置读取，1=顺序） |
 | `--target-chunk-pages` | 自适应分片目标页数（0=仅超限切分，>0=始终切分到此大小） |
@@ -298,7 +312,13 @@ pytest --cov=mineru_parser --cov-report=html
   调整 `api.poll_interval`、`api.max_wait`，并检查网络连通性。
 
 - **批量任务中断了如何恢复**
-  使用 `--resume` 参数继续处理：`mineru-parse batch -i ./pdfs --resume`
+  使用 `--resume` 参数继续处理：`mineru-parse batch -i ./pdfs --resume`。
+  已有输出 md 的文件会自动跳过；配合 `-f` 可强制全部重跑。中断遗留的任务超过
+  `batch.stale_running_hours` 会自动回收重试。
+
+- **输入文件是损坏/伪装的 PDF（如反爬站点返回的 HTML）**
+  会在解析前被预检拦截并跳过（`parse` 直接报错退出，`batch` 警告后只处理有效文件），
+  不再等到上传后才失败。
 
 - **如何预览批量任务不消耗 API 额度**
   使用 `--dry-run` 参数：`mineru-parse batch -i ./pdfs --dry-run`

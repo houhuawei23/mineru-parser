@@ -95,18 +95,20 @@ def process_images(
     temp_extract_dir: Path,
     output_dir: Path,
     max_workers: int | None = None,
+    images_dir_name: str = "images",
 ) -> str:
     """
     处理 Markdown 中的图片：仅保留被引用的图片，重命名为 image_xx.png，转为 PNG，
-    并更新引用格式为 ![image_xx](images/image_xx.png) 后跟 > Caption。
+    并更新引用格式为 ![image_xx](<images_dir_name>/image_xx.png) 后跟 > Caption。
 
     使用进程池并行处理图片转换以提高性能。
 
     Args:
         markdown: 原始 Markdown 文本
         temp_extract_dir: zip 解压临时目录
-        output_dir: 输出目录（images 子目录将在此创建）
+        output_dir: 输出目录（图片子目录将在此创建）
         max_workers: 并行工作进程数，默认 4
+        images_dir_name: 图片子目录名（相对 output_dir 的单路径段，引用路径随之变化）
 
     Returns:
         更新后的 Markdown 文本
@@ -123,8 +125,8 @@ def process_images(
             path_to_info[path] = (f"image_{len(path_to_info) + 1:02d}.png", caption)
             ordered_paths.append(path)
 
-    # 清空并重建 images 目录
-    final_images_dir = output_dir / "images"
+    # 清空并重建图片目录
+    final_images_dir = output_dir / images_dir_name
     if final_images_dir.exists():
         for f in final_images_dir.iterdir():
             if f.is_file():
@@ -169,7 +171,7 @@ def process_images(
         new_name, _ = path_to_info[path]
         # alt 使用 image_xx 不含扩展名
         alt = Path(new_name).stem
-        new_ref = f"![{alt}](images/{new_name})"
+        new_ref = f"![{alt}]({images_dir_name}/{new_name})"
         if caption:
             new_ref += f"\n\n> {caption}"
         return new_ref

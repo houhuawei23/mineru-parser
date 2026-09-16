@@ -14,6 +14,7 @@ from loguru import logger
 
 from mineru_parser.core.orchestrator import orchestrate_parse
 from mineru_parser.core.result import ParseResult
+from mineru_parser.errors import ParseError
 from mineru_parser.models.params import ParseParams, RunContext
 
 
@@ -39,12 +40,20 @@ def run_batch(
         try:
             md = orchestrate_parse(params, ctx)
             results[idx] = ParseResult(
-                success=md is not None,
+                success=True,
                 pdf_path=params.pdf_path,
                 markdown=md,
-                md_path=params.output_dir / md_name if md is not None else None,
+                md_path=params.output_dir / md_name,
                 elapsed=time.perf_counter() - t0,
-                error=None if md is not None else "解析返回空结果",
+                error=None,
+            )
+        except ParseError as e:  # 业务失败：原因即用户可读信息，不记异常栈
+            logger.error(f"处理失败 {params.pdf_path}: {e}")
+            results[idx] = ParseResult(
+                success=False,
+                pdf_path=params.pdf_path,
+                elapsed=time.perf_counter() - t0,
+                error=str(e),
             )
         except Exception as e:  # noqa: BLE001 — 单文件失败不应中断整个批次
             logger.exception(f"处理失败 {params.pdf_path}: {e}")

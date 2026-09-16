@@ -41,14 +41,44 @@ def test_update_job_status(tmp_path: Path) -> None:
         assert job_b.error_message == "boom"
 
 
-def test_should_process_resumes_completed(tmp_path: Path) -> None:
+def test_reclaim_stale_running(tmp_path: Path) -> None:
+    """RUNNING 且 updated_at 早于阈值 -> 回收为 FAILED（retry_count+1）；新鲜的保留。"""
+    from datetime import datetime, timedelta
+
+    with BatchStateManager(tmp_path / "state.db") as state:
+        # 陈旧 RUNNING
+        state.create_job("/x/stale.pdf")
+        stale_ts = (datetime.now() - timedelta(hours=12)).isoformat()
+        state.update_job("/x/stale.pdf", JobStatus.RUNNING)
+        with state._get_connection() as conn:
+            conn.execute(
+                "UPDATE batch_jobs SET updated_at = ? WHERE file_path = ?",
+                (stale_ts, "/x/stale.pdf"),
+            )
+            conn.commit()
+        # 新鲜 RUNNING
+        state.create_job("/x/fresh.pdf")
+        state.update_job("/x/fresh.pdf", JobStatus.RUNNING)
+
+        n = state.reclaim_stale_running(max_age_hours=6.0)
+        assert n == 1
+        stale_job = state.get_job("/x/stale.pdf")
+        assert stale_job.status is JobStatus.FAILED
+        assert stale_job.retry_count == 1
+        assert "回收" in (stale_job.error_message or "")
+        # 回收后的 FAILED 可被 --resume 重新认领
+        assert state.try_start_job("/x/stale.pdf", resume=True) is True
+        # 新鲜 RUNNING 未被回收，仍被跳过
+        assert state.get_job("/x/fresh.pdf").status is JobStatus.RUNNING
+        assert state.try_start_job("/x/fresh.pdf", resume=True) is False
+
+
+def test_reclaim_disabled_when_non_positive(tmp_path: Path) -> None:
     with BatchStateManager(tmp_path / "state.db") as state:
         state.create_job("/x/a.pdf")
-        state.update_job("/x/a.pdf", JobStatus.COMPLETED)
-        # resume=True 时已完成的不应再处理
-        assert state.should_process("/x/a.pdf", resume=True) is False
-        # resume=False 时始终处理
-        assert state.should_process("/x/a.pdf", resume=False) is True
+        state.update_job("/x/a.pdf", JobStatus.RUNNING)
+        assert state.reclaim_stale_running(max_age_hours=0) == 0
+        assert state.get_job("/x/a.pdf").status is JobStatus.RUNNING
 
 
 def test_try_start_job_atomic_claim(tmp_path: Path) -> None:

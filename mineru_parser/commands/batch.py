@@ -23,13 +23,14 @@ from mineru_parser.commands._shared import (
 )
 from mineru_parser.console import (
     console,
+    print_error,
     render_batch_summary,
     render_dry_run_table,
     render_resume_state,
 )
 from mineru_parser.core.batch import run_batch
 from mineru_parser.core.result import ParseResult
-from mineru_parser.engines.pdf_splitter import get_pdf_info
+from mineru_parser.engines.pdf_splitter import get_pdf_info, validate_pdf
 from mineru_parser.engines.state import BatchStateManager, JobStatus, get_state_file
 from mineru_parser.engines.utils import collect_pdf_paths
 from mineru_parser.logging_setup import log_run_result
@@ -44,6 +45,10 @@ def _collect_dry_run_info(
     total_pages = 0
     total_size = 0
     for pdf_path in paths:
+        err = validate_pdf(pdf_path)
+        if err is not None:
+            rows.append((str(pdf_path), f"无效: {err.split('（')[0]}", "-"))
+            continue
         try:
             num_pages, size_bytes = get_pdf_info(pdf_path)
             total_pages += num_pages
@@ -94,7 +99,7 @@ def batch_cmd(
     rc: RunContext = ctx.obj
     resolve_subcommand_config(rc, config_path)
     cfg = rc.config
-    validate_token(token or cfg.token)
+    validate_token(token or cfg.token, quiet=rc.quiet)
 
     # 子命令 --no-cache 与全局 --no-cache 取并集
     disable_cache = rc.no_cache or no_cache
@@ -116,6 +121,21 @@ def batch_cmd(
         log_run_result(False, elapsed=0.0, files_done=0, files_failed=0)
         raise typer.Exit(0)
 
+    # 预检：剔除损坏/伪装成 .pdf 的文件，避免上传后才在轮询阶段失败
+    valid: list[Path] = []
+    for pdf_path in paths:
+        err = validate_pdf(pdf_path)
+        if err is None:
+            valid.append(pdf_path)
+        else:
+            print_error(f"跳过无效文件 — {err}", quiet=rc.quiet)
+            logger.warning(f"预检失败，已跳过: {err}")
+    paths = valid
+    if not paths:
+        print_error("所有输入文件均为无效 PDF", quiet=rc.quiet)
+        log_run_result(False, elapsed=0.0, files_done=0, files_failed=0)
+        raise typer.Exit(1)
+
     out_base = output_dir or (input_path if input_path.is_dir() else input_path.parent)
     md_opts = build_md_options(rc, cfg)
     model_version = model or cfg.model_version
@@ -134,6 +154,7 @@ def batch_cmd(
         raise typer.Exit(0)
 
     state_file = get_state_file(input_path, out_base)
+    out_base.mkdir(parents=True, exist_ok=True)  # 状态库/输出均落在 out_base 下
     batch_conc = concurrency if concurrency is not None else cfg.batch_concurrency
     tok = token or cfg.token
     start = time.perf_counter()
@@ -144,6 +165,10 @@ def batch_cmd(
             console.print(f"[accent]已重置 {n} 个失败任务[/]")
 
         if resume:
+            # 回收上次崩溃遗留的 RUNNING 任务，避免 --resume 永久跳过未完成文件
+            n_stale = state.reclaim_stale_running(cfg.batch_stale_running_hours)
+            if n_stale:
+                console.print(f"[warn]已回收 {n_stale} 个中断遗留任务，将重新处理[/]")
             summary = state.get_summary()
             if summary.get(JobStatus.COMPLETED.value, 0) or summary.get(
                 JobStatus.FAILED.value, 0
@@ -153,12 +178,21 @@ def batch_cmd(
         for pdf_path in paths:
             state.create_job(str(pdf_path))
 
-        # 原子认领任务（resume 感知），构造 ParseParams
+        force = rc.force
+        skipped_existing = 0
+        # 原子认领任务（磁盘真值先于状态库），构造 ParseParams
         claimed: list[tuple[Path, ParseParams]] = []
         for pdf_path in paths:
-            if not state.try_start_job(str(pdf_path), resume=resume):
+            # 布局与 parse 默认对齐：<out>/<stem>/<stem>.md（v2.2.0 起不再加 _parsed 后缀）
+            out_dir = out_base / pdf_path.stem
+            md_path = out_dir / f"{pdf_path.stem}.md"
+            if resume and not force and md_path.exists() and md_path.stat().st_size > 0:
+                # 输出已存在：视为已完成，与状态库对账（磁盘真值优先）
+                state.update_job(str(pdf_path), JobStatus.COMPLETED)
+                skipped_existing += 1
                 continue
-            out_dir = out_base / f"{pdf_path.stem}{cfg.output_parsed_suffix}"
+            if not state.try_start_job(str(pdf_path), resume=resume and not force):
+                continue
             out_dir.mkdir(parents=True, exist_ok=True)
             params = ParseParams(
                 pdf_path=pdf_path,
@@ -177,8 +211,17 @@ def batch_cmd(
             )
             claimed.append((pdf_path, params))
 
+        if skipped_existing:
+            console.print(f"[muted]已跳过 {skipped_existing} 个已有输出的文件[/]")
+
         if not claimed:
             console.print("[muted]没有需要处理的文件[/]")
+            log_run_result(
+                success=True,
+                elapsed=time.perf_counter() - start,
+                files_done=skipped_existing,
+                files_failed=0,
+            )
             raise typer.Exit(0)
 
         console.print(
@@ -189,6 +232,7 @@ def batch_cmd(
         progress: Progress | None = None
         task_id = None
         lock = threading.Lock()
+        failed = 0
         if not rc.quiet:
             progress = Progress(
                 SpinnerColumn(),
@@ -202,16 +246,26 @@ def batch_cmd(
             task_id = progress.add_task("解析 PDF", total=len(claimed))
 
         def on_complete(idx: int, result: ParseResult) -> None:
-            if progress is None or task_id is None:
-                return
+            nonlocal failed
+            pdf_path = claimed[idx][0]
+            # 逐任务即时回写状态：进程崩溃不再遗留 RUNNING
+            if result.success:
+                state.update_job(str(pdf_path), JobStatus.COMPLETED)
+            else:
+                state.update_job(
+                    str(pdf_path), JobStatus.FAILED, result.error or "解析返回空结果"
+                )
             with lock:
-                name = result.pdf_path.name[:30]
-                tag = "OK" if result.success else "FAIL"
-                progress.advance(task_id)
-                progress.update(task_id, description=f"解析 PDF（{tag}: {name}）")
+                if not result.success:
+                    failed += 1
+                if progress is not None and task_id is not None:
+                    name = result.pdf_path.name[:30]
+                    tag = "OK" if result.success else "FAIL"
+                    progress.advance(task_id)
+                    progress.update(task_id, description=f"解析 PDF（{tag}: {name}）")
 
         try:
-            results = run_batch(
+            run_batch(
                 [params for _, params in claimed],
                 rc,
                 batch_concurrency=batch_conc,
@@ -220,16 +274,6 @@ def batch_cmd(
         finally:
             if progress is not None:
                 progress.stop()
-
-        failed = 0
-        for (pdf_path, _), result in zip(claimed, results, strict=True):
-            if result.success:
-                state.update_job(str(pdf_path), JobStatus.COMPLETED)
-            else:
-                state.update_job(
-                    str(pdf_path), JobStatus.FAILED, result.error or "解析返回空结果"
-                )
-                failed += 1
 
         final_summary = state.get_summary()
 

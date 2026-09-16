@@ -92,6 +92,7 @@ def test_split_pdf_cache_roundtrip(tmp_path: Path) -> None:
     assert [f.name for f in fragment_files] == ["p1-50.zip", "p51-60.zip"]
 
     api_calls = {"apply": 0, "download": 0}
+    events: list[tuple[str, dict]] = []
 
     def fake_apply(*a, **kw):
         api_calls["apply"] += 1
@@ -105,6 +106,9 @@ def test_split_pdf_cache_roundtrip(tmp_path: Path) -> None:
         api_calls["download"] += 1
         return b"zip-bytes"
 
+    def track(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
     # 首次：缓存为空 -> 走 API，写缓存
     with (
         patch(f"{_ORCH}.apply_upload_urls", side_effect=fake_apply),
@@ -116,13 +120,26 @@ def test_split_pdf_cache_roundtrip(tmp_path: Path) -> None:
     ):
         from mineru_parser.core.orchestrator import orchestrate_parse
 
-        md1 = orchestrate_parse(params, ctx)
+        md1 = orchestrate_parse(params, ctx, progress_callback=track)
 
     assert md1 == "# merged"
     assert api_calls["apply"] == 2  # 两个片段各申请一次
     assert api_calls["download"] == 2
     for f in fragment_files:
         assert f.exists() and f.read_bytes() == b"zip-bytes"
+
+    # 每个片段的 part_start 必须先于对应 part_complete（进度条可见性）
+    starts = [i for p, i in events if p == "part_start"]
+    completes = [i for p, i in events if p == "part_complete"]
+    assert {i["idx"] for i in starts} == {0, 1}
+    assert {i["idx"] for i in completes} == {0, 1}
+    first_start_pos = min(
+        k for k, (p, i) in enumerate(events) if p == "part_start" and i["idx"] == 0
+    )
+    first_complete_pos = min(
+        k for k, (p, i) in enumerate(events) if p == "part_complete" and i["idx"] == 0
+    )
+    assert first_start_pos < first_complete_pos
 
     # 二次：应命中缓存 -> 不再调用 apply / download
     with (
@@ -208,3 +225,66 @@ def test_source_marker_written(tmp_path: Path) -> None:
     markers = list(cache_dir.rglob("source.txt"))
     assert len(markers) == 1
     assert markers[0].read_text(encoding="utf-8") == str(pdf_path)
+
+
+def test_poll_err_msg_propagates(tmp_path: Path) -> None:
+    """poll 阶段服务端 err_msg 应随 ParseError 透传，不再被泛化为「解析失败或超时」。"""
+    from mineru_parser.core.orchestrator import orchestrate_parse
+    from mineru_parser.errors import ParseError
+
+    pdf_path = tmp_path / "doc.pdf"
+    _make_pdf(pdf_path, 2)
+    params, ctx = _build_params_and_ctx(pdf_path, tmp_path / "cache", tmp_path / "out")
+
+    with (
+        patch(
+            f"{_ORCH}.apply_upload_urls",
+            return_value={
+                "batch_id": "b",
+                "file_urls": ["u"],
+                "upload_headers": [{"Content-Type": "application/pdf"}],
+            },
+        ),
+        patch(f"{_ORCH}.upload_file_to_url", return_value=True),
+        patch(
+            f"{_ORCH}.poll_batch_result",
+            side_effect=ParseError("解析失败: 内部错误"),
+        ),
+    ):
+        with pytest.raises(ParseError, match="内部错误"):
+            orchestrate_parse(params, ctx)
+
+
+def test_fragment_failure_raises_with_count(tmp_path: Path) -> None:
+    """切分场景下任一片段失败：orchestrate_parse 抛 ParseError 并带失败计数。"""
+    from mineru_parser.core.orchestrator import orchestrate_parse
+    from mineru_parser.errors import ParseError
+
+    pdf_path = tmp_path / "big.pdf"
+    _make_pdf(pdf_path, 60)
+    params, ctx = _build_params_and_ctx(pdf_path, tmp_path / "cache", tmp_path / "out")
+
+    calls = {"n": 0}
+
+    def flaky_poll(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ParseError("解析失败: 片段一内部错误")
+        return {"full_zip_url": "http://x"}
+
+    with (
+        patch(
+            f"{_ORCH}.apply_upload_urls",
+            return_value={
+                "batch_id": "b",
+                "file_urls": ["u"],
+                "upload_headers": [{"Content-Type": "application/pdf"}],
+            },
+        ),
+        patch(f"{_ORCH}.upload_file_to_url", return_value=True),
+        patch(f"{_ORCH}.poll_batch_result", side_effect=flaky_poll),
+        patch(f"{_ORCH}.download_zip", return_value=b"zip"),
+        patch(f"{_ORCH}.build_markdown_from_zip", return_value="# part"),
+    ):
+        with pytest.raises(ParseError, match="1/2 个片段解析失败"):
+            orchestrate_parse(params, ctx)

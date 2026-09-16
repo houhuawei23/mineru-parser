@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 
@@ -160,30 +160,47 @@ class BatchStateManager:
                 )
             conn.commit()
 
-    def should_process(self, file_path: str, resume: bool = True) -> bool:
+    def reclaim_stale_running(self, max_age_hours: float) -> int:
         """
-        判断文件是否应该被处理。
+        将 RUNNING 且长时间未更新的任务标记为 FAILED（进程崩溃遗留）。
 
-        :param file_path: 文件路径
-        :param resume: 是否启用断点续传模式
-        :return: 是否需要处理
+        :param max_age_hours: RUNNING 状态的最大容忍时长（小时）；
+            ``<= 0`` 时禁用回收并返回 0。
+        :return: 回收（重置）的任务数量
         """
-        if not resume:
-            return True
-
-        job = self.get_job(file_path)
-        if job is None:
-            return True
-
-        # 已完成或正在运行的任务跳过
-        if job.status in (JobStatus.COMPLETED, JobStatus.RUNNING):
-            return False
-
-        # 失败的任务最多重试 3 次
-        if job.status == JobStatus.FAILED and job.retry_count >= 3:
-            return False
-
-        return True
+        if max_age_hours <= 0:
+            return 0
+        cutoff = datetime.now() - timedelta(hours=max_age_hours)
+        reclaimed = 0
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT file_path, updated_at FROM batch_jobs WHERE status = ?",
+                (JobStatus.RUNNING.value,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    updated = datetime.fromisoformat(row["updated_at"])
+                except (TypeError, ValueError):
+                    updated = None
+                if updated is None or updated < cutoff:
+                    # FAILED 分支会 retry_count+1，符合「可重试的中断」语义
+                    conn.execute(
+                        """
+                        UPDATE batch_jobs
+                        SET status = ?, updated_at = ?,
+                            retry_count = retry_count + 1, error_message = ?
+                        WHERE file_path = ?
+                        """,
+                        (
+                            JobStatus.FAILED.value,
+                            datetime.now().isoformat(),
+                            "进程中断（自动回收）",
+                            row["file_path"],
+                        ),
+                    )
+                    reclaimed += 1
+            conn.commit()
+        return reclaimed
 
     def try_start_job(self, file_path: str, resume: bool = True) -> bool:
         """

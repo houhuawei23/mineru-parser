@@ -161,6 +161,14 @@ class OutputConfig(BaseModel):
     images_dir: str = "images"
     image_filename_pattern: str = "image_{idx:02d}.png"
 
+    @field_validator("images_dir")
+    @classmethod
+    def _single_path_segment(cls, v: str) -> str:
+        """images_dir 必须是单路径段，防止图片引用逃出 md 所在目录。"""
+        if not v or v in (".", "..") or "/" in v or "\\" in v:
+            raise ValueError("必须是单个路径段（不能含 / \\ . ..）")
+        return v
+
 
 class BatchConfig(BaseModel):
     model_config = _FORBID
@@ -168,12 +176,21 @@ class BatchConfig(BaseModel):
     include_pattern: str = "*.pdf"
     exclude_pattern: str = ""
     batch_concurrency: int = 1
+    # --resume 时 RUNNING 状态超过该时长视为进程崩溃遗留，自动回收为可重试
+    stale_running_hours: float = 6.0
 
     @field_validator("batch_concurrency")
     @classmethod
     def _positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("必须为正整数")
+        return v
+
+    @field_validator("stale_running_hours")
+    @classmethod
+    def _non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("不能为负数")
         return v
 
 
@@ -344,6 +361,10 @@ class RootConfig(BaseModel):
     @property
     def batch_concurrency(self) -> int:
         return self.batch.batch_concurrency
+
+    @property
+    def batch_stale_running_hours(self) -> float:
+        return self.batch.stale_running_hours
 
     # pdf_download
     @property

@@ -234,3 +234,56 @@ def test_chunk_ranges_aligns_with_split_paths(tmp_path):
     # 与实际切分片段的页数一致
     parts = split_pdf_by_limits(src, page_limit, size_limit, tmp_path / "t")
     assert [len(_page_texts(p)) for p in parts] == [e - s for s, e in ranges]
+
+
+# ==================== validate_pdf 预检 ====================
+
+
+class TestValidatePdf:
+    def test_valid_pdf_returns_none(self, tmp_path):
+        p = tmp_path / "ok.pdf"
+        _make_pdf(p, 2)
+        from mineru_parser.engines.pdf_splitter import validate_pdf
+
+        assert validate_pdf(p) is None
+
+    def test_missing_file(self, tmp_path):
+        from mineru_parser.engines.pdf_splitter import validate_pdf
+
+        err = validate_pdf(tmp_path / "nope.pdf")
+        assert err is not None and "不存在" in err
+
+    def test_empty_file(self, tmp_path):
+        p = tmp_path / "empty.pdf"
+        p.write_bytes(b"")
+        from mineru_parser.engines.pdf_splitter import validate_pdf
+
+        err = validate_pdf(p)
+        assert err is not None and "为空" in err
+
+    def test_html_masquerading_as_pdf(self, tmp_path):
+        """反爬站点返回的 HTML 伪装 .pdf：应在预检阶段被拦截。"""
+        p = tmp_path / "fake.pdf"
+        p.write_bytes(b"<html><body>captcha</body></html>")
+        from mineru_parser.engines.pdf_splitter import validate_pdf
+
+        err = validate_pdf(p)
+        assert err is not None and "不是有效的 PDF" in err
+
+    def test_header_only_fails_page_parse(self, tmp_path):
+        """含 %PDF 头但无法解析页数的截断文件：报「无法解析页数」。"""
+        p = tmp_path / "trunc.pdf"
+        p.write_bytes(b"%PDF-1.4")
+        from mineru_parser.engines.pdf_splitter import validate_pdf
+
+        err = validate_pdf(p)
+        assert err is not None and "不是有效的 PDF" in err
+
+    def test_truncated_real_pdf(self, tmp_path):
+        p = tmp_path / "cut.pdf"
+        _make_pdf(p, 3)
+        raw = p.read_bytes()
+        p.write_bytes(raw[: int(len(raw) * 0.4)])
+        from mineru_parser.engines.pdf_splitter import validate_pdf
+
+        assert validate_pdf(p) is not None

@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 import requests
 
 from mineru_parser.core.api_client import (
@@ -13,6 +14,7 @@ from mineru_parser.core.api_client import (
     upload_file_to_url,
 )
 from mineru_parser.core.http import close_session, get_session
+from mineru_parser.errors import ParseError
 
 
 class TestGetHeaders:
@@ -351,8 +353,8 @@ class TestPollBatchResult:
         assert result["state"] == "done"
         assert result["full_zip_url"] == "https://download.example.com/result.zip"
 
-    def test_failed_state_returns_none(self) -> None:
-        """验证 state=failed 时返回 None。"""
+    def test_failed_state_raises_parse_error(self) -> None:
+        """验证 state=failed 时抛 ParseError，且携带服务端 err_msg。"""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -370,20 +372,19 @@ class TestPollBatchResult:
         mock_session = Mock()
         mock_session.get.return_value = mock_response
 
-        result = poll_batch_result(
-            token="test_token",
-            base_url="https://api.example.com",
-            batch_id="batch_123",
-            poll_interval=0.01,
-            max_wait=1,
-            timeout=30,
-            session=mock_session,
-        )
+        with pytest.raises(ParseError, match="Processing error"):
+            poll_batch_result(
+                token="test_token",
+                base_url="https://api.example.com",
+                batch_id="batch_123",
+                poll_interval=0.01,
+                max_wait=1,
+                timeout=30,
+                session=mock_session,
+            )
 
-        assert result is None
-
-    def test_timeout_returns_none(self) -> None:
-        """验证超时返回 None。"""
+    def test_timeout_raises_parse_error(self) -> None:
+        """验证超时抛 ParseError。"""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -401,17 +402,16 @@ class TestPollBatchResult:
         mock_session = Mock()
         mock_session.get.return_value = mock_response
 
-        result = poll_batch_result(
-            token="test_token",
-            base_url="https://api.example.com",
-            batch_id="batch_123",
-            poll_interval=0.01,
-            max_wait=0.05,  # 很短超时
-            timeout=30,
-            session=mock_session,
-        )
-
-        assert result is None
+        with pytest.raises(ParseError, match="解析超时"):
+            poll_batch_result(
+                token="test_token",
+                base_url="https://api.example.com",
+                batch_id="batch_123",
+                poll_interval=0.01,
+                max_wait=0.05,  # 很短超时
+                timeout=30,
+                session=mock_session,
+            )
 
     def test_http_error_retries(self) -> None:
         """验证 HTTP 错误时重试。"""
@@ -421,17 +421,16 @@ class TestPollBatchResult:
         mock_session = Mock()
         mock_session.get.return_value = mock_response
 
-        result = poll_batch_result(
-            token="test_token",
-            base_url="https://api.example.com",
-            batch_id="batch_123",
-            poll_interval=0.01,
-            max_wait=0.05,
-            timeout=30,
-            session=mock_session,
-        )
-
-        assert result is None
+        with pytest.raises(ParseError, match="解析超时"):
+            poll_batch_result(
+                token="test_token",
+                base_url="https://api.example.com",
+                batch_id="batch_123",
+                poll_interval=0.01,
+                max_wait=0.05,
+                timeout=30,
+                session=mock_session,
+            )
         # 应该多次重试
         assert mock_session.get.call_count >= 2
 
@@ -440,22 +439,21 @@ class TestPollBatchResult:
         mock_session = Mock()
         mock_session.get.side_effect = requests.RequestException("Connection error")
 
-        result = poll_batch_result(
-            token="test_token",
-            base_url="https://api.example.com",
-            batch_id="batch_123",
-            poll_interval=0.01,
-            max_wait=0.05,
-            timeout=30,
-            session=mock_session,
-        )
-
-        assert result is None
+        with pytest.raises(ParseError, match="解析超时"):
+            poll_batch_result(
+                token="test_token",
+                base_url="https://api.example.com",
+                batch_id="batch_123",
+                poll_interval=0.01,
+                max_wait=0.05,
+                timeout=30,
+                session=mock_session,
+            )
         # 应该多次重试
         assert mock_session.get.call_count >= 2
 
-    def test_done_without_zip_url_returns_none(self) -> None:
-        """验证 state=done 但无 zip_url 时返回 None。"""
+    def test_done_without_zip_url_raises(self) -> None:
+        """验证 state=done 但无 zip_url 时抛 ParseError。"""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -473,17 +471,16 @@ class TestPollBatchResult:
         mock_session = Mock()
         mock_session.get.return_value = mock_response
 
-        result = poll_batch_result(
-            token="test_token",
-            base_url="https://api.example.com",
-            batch_id="batch_123",
-            poll_interval=0.01,
-            max_wait=1,
-            timeout=30,
-            session=mock_session,
-        )
-
-        assert result is None
+        with pytest.raises(ParseError, match="full_zip_url"):
+            poll_batch_result(
+                token="test_token",
+                base_url="https://api.example.com",
+                batch_id="batch_123",
+                poll_interval=0.01,
+                max_wait=1,
+                timeout=30,
+                session=mock_session,
+            )
 
 
 class TestDownloadZip:

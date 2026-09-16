@@ -137,10 +137,12 @@ def build_markdown_from_zip(
     merge_paragraphs: bool = True,
     inline_footnotes: bool = False,
     output_md_name: str = "full.md",
+    images_dir_name: str = "images",
 ) -> str | None:
     """
     从 zip 内容解压、提取 Markdown、复制图片。优先从 JSON 生成完整 Markdown。
 
+    :param images_dir_name: 图片子目录名（相对 output_dir，单路径段）
     :return: markdown 字符串，失败返回 None
     """
     temp_extract_dir = extract_dir / "_temp_extract"
@@ -197,7 +199,9 @@ def build_markdown_from_zip(
             return None
 
         # 图片后处理：仅保留被引用图片，重命名为 image_xx.png，转 PNG，更新引用格式
-        markdown = process_images(markdown, temp_extract_dir, output_dir)
+        markdown = process_images(
+            markdown, temp_extract_dir, output_dir, images_dir_name=images_dir_name
+        )
 
         # 修正行间公式：$$$$ -> $$
         markdown = re.sub(r"\$\$\$\$", "$$", markdown)

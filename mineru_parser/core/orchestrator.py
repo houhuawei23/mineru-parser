@@ -42,6 +42,7 @@ from mineru_parser.engines.pdf_splitter import (
     split_pdf_adaptive,
     split_pdf_by_limits,
 )
+from mineru_parser.errors import ParseError
 from mineru_parser.models.config import RootConfig
 from mineru_parser.models.params import ParseParams, RunContext
 
@@ -69,10 +70,11 @@ def parse_pdf_via_api(
     output_md_name: str | None = None,
     session: requests.Session | None = None,
     progress_callback=None,
-) -> str | None:
+) -> str:
     """上传单个 PDF 到 MinerU API 解析、下载 zip、解压并生成 Markdown。
 
     支持缓存：相同 PDF（同一源内容 + 同一页码集合）命中缓存时直接复用，跳过 API 调用。
+    失败时抛出 :class:`ParseError`（成功返回 Markdown 字符串）。
 
     ``cache_file`` 为该片段对应的缓存 zip 完整路径（由编排层基于「源 PDF 哈希 + 源页码」
     稳定计算，见 :func:`engines.cache.cache_zip_path`）。为 None 时（独立直调）以 ``pdf_path``
@@ -89,9 +91,7 @@ def parse_pdf_via_api(
 
     if not pdf_path.exists():
         logger.error(f"文件不存在: {pdf_path}")
-        if progress_callback is not None:
-            progress_callback("error", {"error": f"文件不存在: {pdf_path}"})
-        return None
+        raise ParseError(f"文件不存在: {pdf_path}")
 
     md_opts = dict(
         include_header=include_header,
@@ -101,6 +101,7 @@ def parse_pdf_via_api(
         merge_paragraphs=merge_paragraphs,
         inline_footnotes=inline_footnotes,
         output_md_name=md_name,
+        images_dir_name=config.output_images_dir,
     )
 
     # 推导缓存文件路径：编排层传入则直接用；否则把 pdf_path 当作源、整篇处理。
@@ -128,6 +129,8 @@ def parse_pdf_via_api(
                 zip_content, output_dir, output_dir, **md_opts
             )
             logger.info(f"build (cache) done in {time.perf_counter() - t0:.2f}s")
+            if markdown is None:
+                raise ParseError("解析结果中未找到有效 Markdown 内容（缓存 zip）")
             return markdown
 
     # 申请上传链接
@@ -144,9 +147,7 @@ def parse_pdf_via_api(
     )
     logger.info(f"apply_upload_urls done in {time.perf_counter() - t0:.2f}s")
     if not apply_result:
-        if progress_callback is not None:
-            progress_callback("error", {"error": "申请上传链接失败"})
-        return None
+        raise ParseError("申请上传链接失败")
     batch_id = apply_result["batch_id"]
     file_urls = apply_result["file_urls"]
     upload_headers = apply_result.get("upload_headers") or []
@@ -163,35 +164,29 @@ def parse_pdf_via_api(
         session=_session,
         upload_headers=upload_headers[0] if upload_headers else None,
     ):
-        if progress_callback is not None:
-            progress_callback("error", {"error": "上传文件失败"})
-        return None
+        raise ParseError("上传文件失败")
     logger.info(f"upload done in {time.perf_counter() - t0:.2f}s")
     if progress_callback is not None:
         progress_callback("upload_done", {})
 
-    # 轮询
+    # 轮询（失败/超时由 poll_batch_result 抛 ParseError，携带服务端 err_msg）
     t0 = time.perf_counter()
-    result = poll_batch_result(
-        token,
-        base_url,
-        batch_id,
-        poll_interval,
-        max_wait,
-        config.request_timeout_poll,
-        session=_session,
-        progress_callback=progress_callback,
-    )
+    try:
+        result = poll_batch_result(
+            token,
+            base_url,
+            batch_id,
+            poll_interval,
+            max_wait,
+            config.request_timeout_poll,
+            session=_session,
+            progress_callback=progress_callback,
+        )
+    except ParseError:
+        logger.exception("轮询失败")
+        raise
     logger.info(f"poll done in {time.perf_counter() - t0:.2f}s")
-    if not result:
-        if progress_callback is not None:
-            progress_callback("error", {"error": "解析失败或超时"})
-        return None
     zip_url = result.get("full_zip_url")
-    if not zip_url:
-        if progress_callback is not None:
-            progress_callback("error", {"error": "state=done 但无 full_zip_url"})
-        return None
 
     # 下载
     if progress_callback is not None:
@@ -208,9 +203,7 @@ def parse_pdf_via_api(
     )
     logger.info(f"download done in {time.perf_counter() - t0:.2f}s")
     if not zip_content:
-        if progress_callback is not None:
-            progress_callback("error", {"error": "下载解析结果失败"})
-        return None
+        raise ParseError("下载解析结果失败")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     if save_zip_to_output:
@@ -228,6 +221,8 @@ def parse_pdf_via_api(
     t0 = time.perf_counter()
     markdown = build_markdown_from_zip(zip_content, output_dir, output_dir, **md_opts)
     logger.info(f"build done in {time.perf_counter() - t0:.2f}s")
+    if markdown is None:
+        raise ParseError("解析结果中未找到有效 Markdown 内容")
     return markdown
 
 
@@ -252,8 +247,11 @@ def orchestrate_parse(
     params: ParseParams,
     ctx: RunContext,
     progress_callback=None,
-) -> str | None:
-    """解析 PDF，若超出页数/大小限制或开启自适应分片则切分、并发处理、合并结果。"""
+) -> str:
+    """解析 PDF，若超出页数/大小限制或开启自适应分片则切分、并发处理、合并结果。
+
+    失败时抛出 :class:`ParseError`（或透传底层异常），成功返回 Markdown 字符串。
+    """
     config = params.config
     pdf_path = params.pdf_path
     base_url = params.base_url or config.base_url
@@ -272,9 +270,7 @@ def orchestrate_parse(
 
     if not pdf_path.exists():
         logger.error(f"文件不存在: {pdf_path}")
-        if progress_callback is not None:
-            progress_callback("error", {"error": f"文件不存在: {pdf_path}"})
-        return None
+        raise ParseError(f"文件不存在: {pdf_path}")
 
     # 页码提取（--pages）
     working_pdf = pdf_path
@@ -289,9 +285,9 @@ def orchestrate_parse(
             logger.error(
                 "页码范围未选中任何有效页面（可能全部超出 PDF 页数），请检查 --pages"
             )
-            if progress_callback is not None:
-                progress_callback("error", {"error": "页码范围未选中任何有效页面"})
-            return None
+            raise ParseError(
+                "页码范围未选中任何有效页面（可能全部超出 PDF 页数），请检查 --pages"
+            )
         try:
             tf = tempfile.NamedTemporaryFile(
                 suffix=".pdf", delete=False, prefix=f"{pdf_path.stem}_pages_"
@@ -303,9 +299,7 @@ def orchestrate_parse(
             logger.exception(f"按页码提取 PDF 失败: {e}")
             if temp_extracted is not None:
                 temp_extracted.unlink(missing_ok=True)
-            if progress_callback is not None:
-                progress_callback("error", {"error": f"按页码提取 PDF 失败: {e}"})
-            return None
+            raise ParseError(f"按页码提取 PDF 失败: {e}") from e
         working_pdf = temp_extracted
         extracted_indices = indices
         logger.info(f"已按 --pages 提取 {len(indices)} 页用于解析")
@@ -410,7 +404,7 @@ def _orchestrate_body(
     rate_limiter,
     target_chunk_pages: int = 0,
     progress_callback=None,
-) -> str | None:
+) -> str:
     needs_split = (
         (target_chunk_pages > 0 and num_pages > target_chunk_pages)
         or num_pages > page_limit
@@ -500,38 +494,44 @@ def _orchestrate_body(
 
         part_results: dict[int, Path] = {}
 
-        def parse_one(idx: int, part_path: Path) -> tuple[int, Path | None]:
-            with rate_limiter:
-                start, end = ranges[idx]
-                src_indices = source_map[start:end]
-                page_tag = describe_page_token(src_indices)
-                part_out = temp_dir / f"_part{idx}"
-                part_out.mkdir(parents=True, exist_ok=True)
-                ok = parse_pdf_via_api(
-                    part_path,
-                    token,
-                    part_out,
-                    config,
-                    output_md_name=config.part_md_name,
-                    base_url=base_url,
-                    model_version=model_version,
-                    poll_interval=poll_interval,
-                    max_wait=max_wait,
-                    cache_enabled=cache_enabled,
-                    cache_dir=cache_dir,
-                    use_cache=use_cache,
-                    cache_file=cache_file_for_token(page_tag),
-                    save_zip_to_output=False,
-                    **common_md,
-                )
-                return (idx, part_out if ok else None)
+        def parse_one(idx: int, part_path: Path) -> tuple[int, Path | None, str | None]:
+            if progress_callback is not None:
+                progress_callback("part_start", {"idx": idx, "total": len(split_paths)})
+            try:
+                with rate_limiter:
+                    start, end = ranges[idx]
+                    src_indices = source_map[start:end]
+                    page_tag = describe_page_token(src_indices)
+                    part_out = temp_dir / f"_part{idx}"
+                    part_out.mkdir(parents=True, exist_ok=True)
+                    parse_pdf_via_api(
+                        part_path,
+                        token,
+                        part_out,
+                        config,
+                        output_md_name=config.part_md_name,
+                        base_url=base_url,
+                        model_version=model_version,
+                        poll_interval=poll_interval,
+                        max_wait=max_wait,
+                        cache_enabled=cache_enabled,
+                        cache_dir=cache_dir,
+                        use_cache=use_cache,
+                        cache_file=cache_file_for_token(page_tag),
+                        save_zip_to_output=False,
+                        **common_md,
+                    )
+                    return (idx, part_out, None)
+            except Exception as e:  # noqa: BLE001 — 收集错误后统一汇总失败片段
+                return (idx, None, str(e) or repr(e))
 
         failed = 0
+        first_error = ""
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [ex.submit(parse_one, i, p) for i, p in enumerate(split_paths)]
             for fut in as_completed(futures):
-                idx, result = fut.result()
-                if result:
+                idx, result, err = fut.result()
+                if result is not None:
                     part_results[idx] = result
                     if progress_callback is not None:
                         progress_callback(
@@ -539,15 +539,16 @@ def _orchestrate_body(
                         )
                 else:
                     failed += 1
+                    if err and not first_error:
+                        first_error = err
 
         if failed > 0:
-            logger.error(f"有 {failed}/{len(split_paths)} 个片段解析失败")
-            if progress_callback is not None:
-                progress_callback(
-                    "error",
-                    {"error": f"有 {failed}/{len(split_paths)} 个片段解析失败"},
-                )
-            return None
+            logger.error(
+                f"有 {failed}/{len(split_paths)} 个片段解析失败: {first_error}"
+            )
+            raise ParseError(
+                f"有 {failed}/{len(split_paths)} 个片段解析失败: {first_error}"
+            )
 
         part_output_dirs = [part_results[i] for i in range(len(split_paths))]
 

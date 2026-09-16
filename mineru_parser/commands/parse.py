@@ -10,19 +10,21 @@ from loguru import logger
 
 from mineru_parser.commands._shared import (
     build_md_options,
+    fail_run,
     resolve_subcommand_config,
     validate_token,
 )
 from mineru_parser.console import (
     console,
     make_progress_callback,
-    render_error,
+    print_error,
     render_result_panel,
     render_run_header,
     RichProgressReporter,
 )
 from mineru_parser.core.orchestrator import orchestrate_parse
 from mineru_parser.engines.cache import cache_group_dir, compute_source_hash
+from mineru_parser.engines.pdf_splitter import validate_pdf
 from mineru_parser.engines.utils import resolve_input_to_pdf
 from mineru_parser.logging_setup import log_run_result
 from mineru_parser.models.params import ParseParams, RunContext
@@ -79,7 +81,7 @@ def parse_cmd(
     rc: RunContext = ctx.obj
     resolve_subcommand_config(rc, config_path)
     cfg = rc.config
-    validate_token(token or cfg.token)
+    validate_token(token or cfg.token, quiet=rc.quiet)
 
     # 子命令 --no-cache 与全局 --no-cache 取并集
     disable_cache = rc.no_cache or no_cache
@@ -90,7 +92,7 @@ def parse_cmd(
         out_dir = output or Path.cwd()
         result = resolve_input_to_pdf(s, out_dir)
         if not result[0]:
-            console.print(render_error(f"下载失败: {s}"))
+            print_error(f"下载失败: {s}", quiet=rc.quiet)
             log_run_result(False, None, 0.0)
             raise typer.Exit(1)
         pdf_path, stem = result
@@ -103,11 +105,17 @@ def parse_cmd(
     else:
         p = Path(input_path)
         if not p.exists():
-            console.print(render_error(f"文件不存在: {p}"))
+            print_error(f"文件不存在: {p}", quiet=rc.quiet)
             log_run_result(False, None, 0.0)
             raise typer.Exit(1)
         if p.suffix.lower() != ".pdf":
-            console.print(render_error("输入不是 PDF 文件"))
+            print_error("输入不是 PDF 文件", quiet=rc.quiet)
+            log_run_result(False, None, 0.0)
+            raise typer.Exit(1)
+        # 预检：文件为空 / 缺少 %PDF 头 / 无法解析页数时，在任何网络调用前报错
+        err = validate_pdf(p)
+        if err is not None:
+            print_error(err, quiet=rc.quiet)
             log_run_result(False, None, 0.0)
             raise typer.Exit(1)
         pdf_path = p
@@ -185,7 +193,14 @@ def parse_cmd(
     progress_callback = make_progress_callback(reporter)
     start = time.perf_counter()
     try:
-        markdown = orchestrate_parse(params, rc, progress_callback=progress_callback)
+        try:
+            markdown = orchestrate_parse(
+                params, rc, progress_callback=progress_callback
+            )
+        except Exception as e:  # noqa: BLE001 — 失败原因已随异常携带，安全网兜底
+            logger.exception("解析失败")
+            fail_run(str(e) or type(e).__name__, rc, time.perf_counter() - start)
+            return  # pragma: no cover — fail_run 必然抛出
     finally:
         reporter.close()
 

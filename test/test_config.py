@@ -26,3 +26,26 @@ def test_load_config_explicit_missing_raises() -> None:
     """命令行 -c 指向不存在的文件时抛出 ConfigError。"""
     with pytest.raises(ConfigError, match="配置文件不存在"):
         load_config(Path("/nonexistent/user_config.yaml"))
+
+
+class TestImagesDirValidation:
+    """output.images_dir 必须是单路径段（Phase 4b）。"""
+
+    def test_default_valid(self) -> None:
+        from mineru_parser.models.config import OutputConfig
+
+        assert OutputConfig().images_dir == "images"
+
+    def test_custom_valid(self) -> None:
+        from mineru_parser.models.config import OutputConfig
+
+        assert OutputConfig(images_dir="pics").images_dir == "pics"
+
+    def test_path_separators_rejected(self) -> None:
+        import pytest
+
+        from mineru_parser.models.config import OutputConfig
+
+        for bad in ("a/b", "a\\b", ".", "..", ""):
+            with pytest.raises(Exception):  # noqa: B017 — pydantic ValidationError
+                OutputConfig(images_dir=bad)
